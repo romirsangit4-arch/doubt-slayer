@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
             {
               role: 'user',
               parts: [
-                { text: "Solve this physics/math problem step-by-step. Identify the core concepts needed for each step." },
+                { text: "Solve this physics/math problem step-by-step. Identify the core concepts needed for each step. Output LaTeX using $ and $$ strictly. DO NOT escape dollar signs (e.g., use $M$, not \\$M\\$)." },
                 { inlineData: { data: imageBase64, mimeType: "image/jpeg" } }
               ]
             }
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
       } else if (content) {
         const solutionRes = await ai.models.generateContent({
           model: 'gemini-1.5-pro',
-          contents: `Solve this physics/math problem step-by-step. Identify the core concepts needed for each step.\n\nProblem: ${content}`
+          contents: `Solve this physics/math problem step-by-step. Identify the core concepts needed for each step.\n\nProblem: ${content}\n\nIMPORTANT: Use $ and $$ for LaTeX math formatting, and never escape dollar signs.`
         });
         solutionContext = solutionRes.text || "Solution unavailable.";
       }
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
         contents: `You are a diagnostic tutor. 
         SOLUTION CONTEXT: ${solutionContext}
         
-        Ask ONE short question (max 15 words) to test the very first concept needed to solve this problem. Do not explain.`
+        Ask ONE short question (max 15 words) to test the very first concept needed to solve this problem. Do not explain. IMPORTANT: Use $ and $$ for LaTeX math formatting, and never escape dollar signs (e.g. use $x$, not \\$x\\$).`
       });
 
       // Save to in-memory store
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
              SOLUTION CONTEXT: ${session.solutionContext}
              ASSESSMENT LOG: ${JSON.stringify(session.assessmentLog)}
              
-             Evaluate the student's last answer. Then ask ONE short question testing the next concept. (Max 15 words).`
+             Evaluate the student's last answer. Then ask ONE short question testing the next concept. (Max 15 words). IMPORTANT: Use $ and $$ for LaTeX math formatting, and never escape dollar signs.`
            });
            
            return NextResponse.json({ response: diagRes.text || "Cannot parse answer.", phase: 'diagnosing' });
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
            const exRes = await ai.models.generateContent({
              model: 'gemini-1.5-flash',
              contents: `Generate a very short, simple 1-step physics micro-example problem testing: ${session.weakConcepts[0]}. 
-             Return ONLY the problem text.`
+             Return ONLY the problem text. IMPORTANT: Use $ and $$ for LaTeX math formatting, and never escape dollar signs.`
            });
            
            session.microExamples.push(exRes.text || "Example generation failed.");
@@ -131,7 +131,7 @@ export async function POST(req: NextRequest) {
           model: 'gemini-1.5-pro',
           contents: `Create a new problem isomorphic to the original physics problem based on the context: ${session.solutionContext}.
           Make it slightly different but testing the same concepts.
-          Output ONLY the problem statement.`
+          Output ONLY the problem statement. IMPORTANT: Use $ and $$ for LaTeX math formatting, and never escape dollar signs.`
         });
 
         session.reconstruction = reconRes.text || "Problem generation failed.";
@@ -148,7 +148,7 @@ export async function POST(req: NextRequest) {
            model: 'gemini-1.5-flash',
            contents: `Reconstruction Problem: ${session.reconstruction}
            Student says: ${content}
-           Evaluate this step. If correct, ask for the next step. If wrong, give a tiny hint.`
+           Evaluate this step. If correct, ask for the next step. If wrong, give a tiny hint. IMPORTANT: Use $ and $$ for LaTeX math formatting, and never escape dollar signs.`
         });
         return NextResponse.json({ response: evalRes.text || "I'm not sure.", phase: 'reconstruction' });
       }

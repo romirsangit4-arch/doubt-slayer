@@ -213,17 +213,35 @@ export default function ChatPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto w-full relative">
-        <div className="max-w-3xl mx-auto flex flex-col px-4 pt-4 pb-6 min-h-full justify-end">
+        <div className="max-w-3xl mx-auto flex flex-col px-4 pt-4 pb-6 min-h-full">
           {!activeSession && messages.length === 0 && (
-            <div className="flex-1 flex flex-col items-center justify-center opacity-90 my-auto pb-10">
-              <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-4">
+            <div className="my-auto pb-10 flex flex-col items-center justify-center opacity-90 h-full">
+              <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-4 mt-20">
                 <Camera className="w-8 h-8 text-indigo-600" />
               </div>
-              <p className="text-sm font-medium text-slate-900">Snap a problem to begin</p>
+              <h2 className="text-lg font-semibold text-slate-900 mb-2">Ready to solve?</h2>
+              <p className="text-sm text-slate-500 mb-6 text-center max-w-sm">Capture a physics or math problem using your camera, or upload an image from your gallery.</p>
+              
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-full font-medium hover:bg-indigo-700 transition shadow-sm"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Take Photo</span>
+                </button>
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-white text-slate-700 border border-gray-200 rounded-full font-medium hover:bg-gray-50 transition shadow-sm"
+                >
+                  <ImagePlus className="w-4 h-4" />
+                  <span>Upload Image</span>
+                </button>
+              </div>
             </div>
           )}
 
-          <div className="flex flex-col space-y-4">
+          <div className="flex flex-col space-y-4 justify-end mt-auto">
             {messages.map((m, idx) => (
               <motion.div 
                 initial={{ opacity: 0, y: 10 }}
@@ -251,7 +269,7 @@ export default function ChatPage() {
                     <div className="markdown-body text-[15px] leading-relaxed break-words">
                       <ReactMarkdown
                         remarkPlugins={[remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
+                        rehypePlugins={[[rehypeKatex, { strict: false }]]}
                         components={{
                           p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
                           a: ({ node, ...props }) => <a className="text-indigo-600 hover:underline" {...props} />,
@@ -260,7 +278,7 @@ export default function ChatPage() {
                           li: ({ node, ...props }) => <li className="mb-1" {...props} />,
                         }}
                       >
-                        {m.content}
+                        {m.content.replace(/\\\$/g, '$')}
                       </ReactMarkdown>
                     </div>
                   ) : (
