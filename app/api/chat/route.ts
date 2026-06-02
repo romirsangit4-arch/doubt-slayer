@@ -1,13 +1,34 @@
 import { GoogleGenAI } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 
-const ai = new GoogleGenAI({
+const defaultAi = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
+async function isCustomKeyValid(apiKey: string) {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { messages, sessionData } = await req.json();
+    const { messages, sessionData, customApiKey } = await req.json();
+
+    let ai = defaultAi;
+    let customKeyFailed = false;
+
+    if (customApiKey && typeof customApiKey === 'string' && customApiKey.trim() !== '') {
+      const isValid = await isCustomKeyValid(customApiKey);
+      if (isValid) {
+        ai = new GoogleGenAI({ apiKey: customApiKey });
+      } else {
+        customKeyFailed = true;
+      }
+    }
 
     const systemInstruction = `You are a stubborn JEE tutor.
 We are building an AI-native tutoring service. You are the tutor, diagnostician, and bookkeeper.
@@ -77,14 +98,18 @@ If you believe the act should change based on the conversation (e.g. they succes
       }
     });
 
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/plain",
-      },
+    const headers = new Headers({
+      "Content-Type": "text/plain",
     });
+    if (customKeyFailed) {
+      headers.set("X-Custom-Key-Failed", "true");
+    }
+
+    return new Response(stream, { headers });
 
   } catch (error: any) {
     console.error("Chat Error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+

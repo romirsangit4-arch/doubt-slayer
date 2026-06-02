@@ -1,24 +1,16 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Send, X, MoreVertical, ChevronLeft, Lock, Settings as SettingsIcon, LogOut, LogIn } from 'lucide-react';
+import { Camera, Send, X, Settings as SettingsIcon, LogOut, LogIn, ChevronLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { useFirebase } from '@/components/firebase-provider';
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
 
 interface ChatMessage {
   role: 'user' | 'model';
   content: string;
   imageBase64?: string;
-}
-
-interface ProcessedImageInfo {
-  problem_text: string;
-  detected_topic: string;
-  ocr_confidence: number;
-  base64Data: string;
+  hint?: boolean;
 }
 
 export default function ChatPage() {
@@ -26,29 +18,15 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [act, setAct] = useState<1 | 2 | 3>(1);
   const [stagedImage, setStagedImage] = useState<string | null>(null);
-  const [problemInfo, setProblemInfo] = useState<ProcessedImageInfo | null>(null);
-  const [activeSession, setActiveSession] = useState(false);
-  const [showPaywall, setShowPaywall] = useState(false);
   
+  const [activeSession, setActiveSession] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [customApiKey, setCustomApiKey] = useState('');
-  const [keyError, setKeyError] = useState(false);
+  const [sessionPhase, setSessionPhase] = useState<string>('idle');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const savedKey = localStorage.getItem('customGeminiKey') || '';
-    setCustomApiKey(savedKey);
-  }, []);
-
-  const handleSaveKey = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCustomApiKey(e.target.value);
-    localStorage.setItem('customGeminiKey', e.target.value);
-    setKeyError(false); // reset error on change
-  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -70,55 +48,38 @@ export default function ChatPage() {
     reader.readAsDataURL(file);
   };
 
-  const saveDoubtToFirestore = async (data: any, base64: string) => {
-    if (!user) return;
-    try {
-      await addDoc(collection(db, 'sessions'), {
-        userId: user.uid,
-        problem_text: data.problem_text,
-        detected_topic: data.detected_topic,
-        imageBase64_preview: base64,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      });
-    } catch (e) {
-      console.error("Failed to cache doubt:", e);
-    }
-  };
-
-  const processStagedImage = async (base64: string) => {
+  const startNewSession = async (base64: string | null | undefined, initialMessage?: string) => {
     setIsTyping(true);
-    setKeyError(false);
     try {
-      const res = await fetch('/api/process-image', {
+      const newSessionId = crypto.randomUUID();
+      setSessionId(newSessionId);
+      
+      const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64, customApiKey })
+        body: JSON.stringify({ 
+          action: 'start_session',
+          sessionId: newSessionId,
+          imageBase64: base64,
+          content: initialMessage, // optional
+          userId: user?.uid 
+        })
       });
       const data = await res.json();
       
-      if (data.customKeyFailed) {
-        setKeyError(true);
-      }
-
-      if (data.problem_text) {
-        setProblemInfo({
-          ...data,
-          base64Data: base64
-        });
-        
-        await saveDoubtToFirestore(data, base64);
-        
-        const starterMessage = `I see a problem about ${data.detected_topic}. ${data.ocr_confidence < 0.8 ? `I read the problem as: "${data.problem_text}". Is this correct? ` : ''}Let's break it down. What's the very first step or concept we need to apply here?`;
-        
+      if (data.question) {
         setMessages([
-          { role: 'model', content: starterMessage }
+          { role: 'user', content: initialMessage || 'Uploaded an image.', imageBase64: base64 || undefined },
+          { role: 'model', content: data.question }
         ]);
         setActiveSession(true);
+        setSessionPhase('diagnosing');
+      } else if (data.error) {
+        setMessages([{ role: 'model', content: `API Error: ${data.error}. Please ensure your Gemini API Key is correctly configured in the platform.` }]);
       }
     } catch (e) {
       console.error(e);
-      setMessages([{ role: 'model', content: "I couldn't read that image clearly. Could you describe the problem?" }]);
+      setMessages([{ role: 'model', content: "Something went wrong initializing the session." }]);
     } finally {
       setIsTyping(false);
     }
@@ -129,13 +90,11 @@ export default function ChatPage() {
 
     const currentInput = input;
     const currentImage = stagedImage;
-
     setInput('');
     setStagedImage(null);
 
-    // If starting a totally new session by just uploading an image first
-    if (!activeSession && currentImage) {
-      await processStagedImage(currentImage);
+    if (!activeSession) {
+      await startNewSession(currentImage, currentInput);
       return;
     }
 
@@ -145,59 +104,29 @@ export default function ChatPage() {
       imageBase64: currentImage || undefined
     };
 
-    const newHistory = [...messages, newMessage];
-    setMessages(newHistory);
+    setMessages(prev => [...prev, newMessage]);
     setIsTyping(true);
-    setKeyError(false);
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: newHistory,
-          customApiKey,
-          sessionData: {
-            act: act,
-            topic: problemInfo?.detected_topic,
-            problem: problemInfo?.problem_text
-          }
+          action: 'send_message',
+          sessionId,
+          userId: user?.uid,
+          content: currentInput
         })
       });
 
-      if (res.headers.get('X-Custom-Key-Failed') === 'true') {
-        setKeyError(true);
-      }
-
-      if (!res.ok) throw new Error('API Error');
-
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      let aiResponse = '';
-
-      setMessages((prev) => [...prev, { role: 'model', content: '' }]);
-
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
-          aiResponse += chunk;
-          
-          setMessages((prev) => {
-            const updated = [...prev];
-            updated[updated.length - 1].content = aiResponse;
-            return updated;
-          });
-        }
-      }
+      const data = await res.json();
       
-      if (newHistory.length > 5 && act === 1 && !showPaywall) {
-        setTimeout(() => {
-          setShowPaywall(true);
-        }, 2000);
+      if (data.response) {
+        setMessages(prev => [...prev, { role: 'model', content: data.response }]);
+        setSessionPhase(data.phase);
+      } else if (data.error) {
+        setMessages(prev => [...prev, { role: 'model', content: `API Error: ${data.error}` }]);
       }
-
     } catch (e) {
       console.error(e);
       setMessages((prev) => [...prev, { role: 'model', content: "Connection lost. Try again." }]);
@@ -206,18 +135,51 @@ export default function ChatPage() {
     }
   };
 
+  const revealHint = async () => {
+    if (isTyping) return;
+    setIsTyping(true);
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'get_hint',
+          sessionId,
+          userId: user?.uid
+        })
+      });
+      const data = await res.json();
+      if (data.hint) {
+        setMessages(prev => [...prev, { role: 'model', content: '💡 Hint: ' + data.hint }]);
+      }
+    } catch (_) {
+       console.error("Failed to get hint");
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-[100dvh] bg-gray-50 text-slate-900 font-sans sm:pb-0 overflow-hidden">
-      {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200 shadow-sm z-10 shrink-0">
         <div className="flex items-center gap-3">
-          <button className="p-2 -ml-2 rounded-full hover:bg-gray-50 transition">
+          <button
+            onClick={() => {
+              setActiveSession(false);
+              setSessionId(null);
+              setSessionPhase('idle');
+              setMessages([]);
+              setStagedImage(null);
+              setInput('');
+            }}
+            className="p-2 -ml-2 rounded-full hover:bg-gray-50 transition"
+          >
             <ChevronLeft className="w-5 h-5 text-slate-600" />
           </button>
           <div className="flex flex-col">
             <h1 className="text-sm font-semibold tracking-wide">JEE Tutor</h1>
             <span className="text-xs text-emerald-500 font-mono">
-               {isTyping ? 'typing...' : '● online'}
+               {isTyping ? 'typing...' : '● online'} | {sessionPhase}
             </span>
           </div>
         </div>
@@ -228,41 +190,16 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* Main Chat Area */}
       <div className="flex-1 overflow-y-auto w-full max-w-3xl mx-auto flex flex-col relative px-4 pt-4 pb-20">
-        {keyError && (
-          <div className="mx-auto mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-600 max-w-sm text-center">
-            Your custom API key is invalid or not working. Continuing by default API key.
-          </div>
-        )}
-
-        {problemInfo && (
-          <div className="sticky top-0 z-10 mx-auto mb-6 bg-white/80 backdrop-blur-md border border-gray-200 rounded-xl p-2 flex items-start gap-4 shadow-sm w-fit max-w-[90%]">
-            <img 
-              src={`data:image/jpeg;base64,${problemInfo.base64Data}`} 
-              className="w-16 h-16 object-cover rounded-md border border-gray-100" 
-              alt="Problem" 
-            />
-            <div className="flex flex-col justify-center min-w-0 pr-4">
-              <span className="text-xs text-slate-500 font-medium tracking-wider uppercase mb-1">Act {act} • {problemInfo.detected_topic}</span>
-              <p className="text-sm text-slate-900 line-clamp-2 leading-tight">
-                {problemInfo.problem_text}
-              </p>
-            </div>
-          </div>
-        )}
-
         {!activeSession && messages.length === 0 && (
           <div className="flex-1 flex flex-col items-center justify-center opacity-90">
             <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-4">
               <Camera className="w-8 h-8 text-indigo-600" />
             </div>
             <p className="text-sm font-medium text-slate-900">Snap a problem to begin</p>
-            <p className="text-xs text-slate-500 mt-1 max-w-xs text-center">Upload HC Verma, Irodov, or coaching sheets.</p>
           </div>
         )}
 
-        {/* Messages */}
         <div className="flex flex-col space-y-4 justify-end min-h-full">
           {messages.map((m, idx) => (
             <motion.div 
@@ -291,11 +228,17 @@ export default function ChatPage() {
               </div>
             </motion.div>
           ))}
+          {activeSession && !isTyping && (
+             <div className="flex justify-start">
+                <button onClick={revealHint} className="ml-2 mt-1 px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded-full hover:bg-yellow-200 transition">
+                   Ask for Hint
+                </button>
+             </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
       </div>
 
-      {/* Input Area */}
       <div className="bg-white border-t border-gray-200 p-2 sm:p-4 shrink-0 pb-safe">
          <div className="max-w-3xl mx-auto">
             <AnimatePresence>
@@ -358,43 +301,6 @@ export default function ChatPage() {
          </div>
       </div>
 
-      {/* Paywall Modal */}
-      <AnimatePresence>
-        {showPaywall && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="absolute inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
-          >
-            <motion.div 
-              initial={{ scale: 0.95, y: 10 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-white border border-gray-200 rounded-3xl p-6 sm:p-8 max-w-sm w-full shadow-2xl flex flex-col items-center text-center"
-            >
-              <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-6">
-                <Lock className="w-8 h-8 text-indigo-600" />
-              </div>
-              <h2 className="text-xl font-bold text-slate-900 mb-2">Continue to repair and solve</h2>
-              <p className="text-sm text-slate-500 mb-8">
-                Your Act 1 free session is complete. Unlock unlimited micro-examples and full solutions.
-              </p>
-              
-              <button 
-                onClick={() => setShowPaywall(false)}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-4 rounded-xl transition flex items-center justify-center gap-2"
-              >
-                Unlock Session — ₹50
-              </button>
-              
-              <button onClick={() => setShowPaywall(false)} className="mt-4 text-xs font-medium text-slate-500 hover:text-slate-700 transition">
-                Close (Preview Only)
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Settings Modal */}
       <AnimatePresence>
         {showSettings && (
           <motion.div 
@@ -416,20 +322,6 @@ export default function ChatPage() {
                 </button>
               </div>
 
-              <div className="mb-8">
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Bring your own key</label>
-                <input 
-                  type="password" 
-                  value={customApiKey}
-                  onChange={handleSaveKey}
-                  placeholder="Paste Gemini API Key..."
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all font-mono"
-                />
-                <p className="text-xs text-slate-500 mt-2">
-                  Used purely on your device. Overrides default API if valid.
-                </p>
-              </div>
-
               <div className="border-t border-gray-100 pt-6">
                 {user ? (
                    <div className="flex flex-col gap-4">
@@ -439,7 +331,6 @@ export default function ChatPage() {
                        </div>
                        <div className="min-w-0 flex-1">
                          <p className="text-sm font-semibold text-slate-900 truncate">{user.email}</p>
-                         <p className="text-xs text-slate-500">Logged in via Google</p>
                        </div>
                      </div>
                      <button 
@@ -463,7 +354,6 @@ export default function ChatPage() {
                     Sign in with Google
                   </button>
                 )}
-                
               </div>
             </motion.div>
           </motion.div>

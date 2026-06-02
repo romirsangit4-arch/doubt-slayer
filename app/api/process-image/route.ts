@@ -1,16 +1,36 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
 
-const ai = new GoogleGenAI({
+const defaultAi = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
+async function isCustomKeyValid(apiKey: string) {
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { imageBase64 } = await req.json();
+    const { imageBase64, customApiKey } = await req.json();
 
     if (!imageBase64) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
+    }
+
+    let ai = defaultAi;
+    let customKeyFailed = false;
+    if (customApiKey && typeof customApiKey === 'string' && customApiKey.trim() !== '') {
+      const isValid = await isCustomKeyValid(customApiKey);
+      if (isValid) {
+        ai = new GoogleGenAI({ apiKey: customApiKey });
+      } else {
+        customKeyFailed = true;
+      }
     }
 
     const response = await ai.models.generateContent({
@@ -58,6 +78,9 @@ export async function POST(req: NextRequest) {
 
     const responseText = response.text || "{}";
     const parsed = JSON.parse(responseText.trim());
+    if (customKeyFailed) {
+      parsed.customKeyFailed = true;
+    }
 
     return NextResponse.json(parsed);
 

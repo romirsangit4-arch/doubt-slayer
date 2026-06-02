@@ -1,5 +1,6 @@
 import type {Metadata} from 'next';
 import './globals.css'; // Global styles
+import { FirebaseProvider } from '@/components/firebase-provider';
 
 export const metadata: Metadata = {
   title: 'My Google AI Studio App',
@@ -9,7 +10,11 @@ export const metadata: Metadata = {
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
     <html lang="en">
-      <body className="bg-gray-50 text-slate-900 antialiased" suppressHydrationWarning>{children}</body>
+      <body className="bg-gray-50 text-slate-900 antialiased" suppressHydrationWarning>
+        <FirebaseProvider>
+          {children}
+        </FirebaseProvider>
+      </body>
     </html>
   );
 }

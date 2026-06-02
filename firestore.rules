@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId && isValidId(userId);
+      allow create: if isSignedIn() && request.auth.uid == userId && isValidId(userId) &&
+        incoming().keys().hasAll(['email', 'createdAt']) && incoming().keys().size() == 2 &&
+        incoming().email is string && incoming().email.size() <= 200 &&
+        incoming().createdAt == request.time;
+    }
+
+    match /sessions/{sessionId} {
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid && isValidId(sessionId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(sessionId) && 
+        incoming().keys().hasAll(['userId', 'createdAt', 'updatedAt']) &&
+        incoming().userId is string && incoming().userId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      
+      allow update: if isSignedIn() && isValidId(sessionId) && 
+        resource.data.userId == request.auth.uid &&
+        incoming().userId == existing().userId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (incoming().diff(existing()).affectedKeys().hasOnly(['problem_text', 'detected_topic', 'imageBase64_preview', 'updatedAt', 'messages']));
+      
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid && isValidId(sessionId);
+    }
+  }
+}

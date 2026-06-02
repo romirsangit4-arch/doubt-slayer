@@ -1,0 +1,53 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "User email."
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "A doubt solving session.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "ID of the user who requested the session."
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "problem_text": {
+          "type": "string"
+        },
+        "detected_topic": {
+          "type": "string"
+        },
+        "imageBase64_preview": {
+          "type": "string"
+        }
+      },
+      "required": ["userId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles."
+    },
+    "sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/Session" },
+      "description": "Recent doubts mapped to user"
+    }
+  }
+}
