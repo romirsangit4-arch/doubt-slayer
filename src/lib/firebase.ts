@@ -12,5 +12,17 @@ const firebaseConfig = {
 };
 
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+
+// Handle cases where dummy config causes getAuth/getFirestore to throw
+let authInstance;
+let dbInstance;
+
+try {
+  authInstance = getAuth(app);
+  dbInstance = getFirestore(app);
+} catch {
+  console.warn("Firebase initialization skipped (invalid dummy config or missing keys).");
+}
+
+export const auth = authInstance;
+export const db = dbInstance;

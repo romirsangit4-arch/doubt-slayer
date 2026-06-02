@@ -26,11 +26,16 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!auth) {
+      setTimeout(() => setLoading(false), 0);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       
       // If user logs in, ensure their user document exists
-      if (currentUser) {
+      if (currentUser && db) {
         try {
           const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
           if (!userDoc.exists()) {
@@ -51,11 +56,16 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signInWithGoogle = async () => {
+    if (!auth) {
+      console.warn("Auth is not initialized.");
+      return;
+    }
     const provider = new GoogleAuthProvider();
     await signInWithPopup(auth, provider);
   };
 
   const logout = async () => {
+    if (!auth) return;
     await signOut(auth);
   };
 

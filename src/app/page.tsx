@@ -16,7 +16,7 @@ interface ChatMessage {
 }
 
 export default function ChatPage() {
-  const { user, signInWithGoogle, logout } = useFirebase();
+  const { user, loading, signInWithGoogle, logout } = useFirebase();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -182,6 +182,14 @@ export default function ChatPage() {
       setIsTyping(false);
     }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[100dvh] bg-slate-950">
+         <div className="w-8 h-8 rounded-full border-4 border-indigo-500 border-t-transparent animate-spin" />
+      </div>
+    );
+  }
 
   const isLandingScreen = !user && !trialMode;
 
