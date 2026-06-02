@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import "katex/dist/katex.min.css";
 import { FirebaseProvider } from "@/components/firebase-provider";
 
 const geistSans = Geist({

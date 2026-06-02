@@ -1,10 +1,13 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Camera, Send, X, Settings as SettingsIcon, LogOut, LogIn, ChevronLeft } from 'lucide-react';
+import { Camera, Send, X, Settings as SettingsIcon, LogOut, LogIn, ChevronLeft, ImagePlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { useFirebase } from '@/components/firebase-provider';
+import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 
 interface ChatMessage {
   role: 'user' | 'model';
@@ -26,6 +29,7 @@ export default function ChatPage() {
   const [sessionPhase, setSessionPhase] = useState<string>('idle');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -65,7 +69,16 @@ export default function ChatPage() {
           userId: user?.uid 
         })
       });
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error("Invalid response from server.");
+      }
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Server error');
+      }
       
       if (data.question) {
         setMessages([
@@ -119,7 +132,16 @@ export default function ChatPage() {
         })
       });
 
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error("Invalid response from server.");
+      }
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Server error');
+      }
       
       if (data.response) {
         setMessages(prev => [...prev, { role: 'model', content: data.response }]);
@@ -190,52 +212,72 @@ export default function ChatPage() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto w-full max-w-3xl mx-auto flex flex-col relative px-4 pt-4 pb-20">
-        {!activeSession && messages.length === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center opacity-90">
-            <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-4">
-              <Camera className="w-8 h-8 text-indigo-600" />
-            </div>
-            <p className="text-sm font-medium text-slate-900">Snap a problem to begin</p>
-          </div>
-        )}
-
-        <div className="flex flex-col space-y-4 justify-end min-h-full">
-          {messages.map((m, idx) => (
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              key={idx} 
-              className={cn(
-                "flex max-w-[85%] sm:max-w-[75%]", 
-                m.role === 'user' ? "self-end justify-end" : "self-start justify-start"
-              )}
-            >
-              <div className={cn(
-                "px-4 py-3 rounded-2xl whitespace-pre-wrap leading-relaxed text-[15px]",
-                m.role === 'user' 
-                  ? "bg-indigo-600 text-white rounded-br-sm shadow-sm" 
-                  : "bg-white text-slate-900 rounded-bl-sm border border-gray-200 shadow-sm"
-              )}>
-                {m.imageBase64 && (
-                   <img 
-                   src={`data:image/jpeg;base64,${m.imageBase64}`} 
-                   className="w-full h-auto max-h-48 object-cover rounded-md mb-2 border border-gray-200" 
-                   alt="Attached context" 
-                 />
-                )}
-                {m.content}
+      <div className="flex-1 overflow-y-auto w-full relative">
+        <div className="max-w-3xl mx-auto flex flex-col px-4 pt-4 pb-6 min-h-full justify-end">
+          {!activeSession && messages.length === 0 && (
+            <div className="flex-1 flex flex-col items-center justify-center opacity-90 my-auto pb-10">
+              <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-4">
+                <Camera className="w-8 h-8 text-indigo-600" />
               </div>
-            </motion.div>
-          ))}
-          {activeSession && !isTyping && (
-             <div className="flex justify-start">
-                <button onClick={revealHint} className="ml-2 mt-1 px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded-full hover:bg-yellow-200 transition">
-                   Ask for Hint
-                </button>
-             </div>
+              <p className="text-sm font-medium text-slate-900">Snap a problem to begin</p>
+            </div>
           )}
-          <div ref={messagesEndRef} />
+
+          <div className="flex flex-col space-y-4">
+            {messages.map((m, idx) => (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                key={idx} 
+                className={cn(
+                  "flex max-w-[90%] sm:max-w-[85%]", 
+                  m.role === 'user' ? "self-end justify-end" : "self-start justify-start"
+                )}
+              >
+                <div className={cn(
+                  "px-4 py-3 rounded-2xl whitespace-pre-wrap leading-relaxed text-[15px] overflow-hidden",
+                  m.role === 'user' 
+                    ? "bg-indigo-600 text-white rounded-br-sm shadow-sm" 
+                    : "bg-white text-slate-900 rounded-bl-sm border border-gray-200 shadow-sm"
+                )}>
+                  {m.imageBase64 && (
+                     <img 
+                     src={`data:image/jpeg;base64,${m.imageBase64}`} 
+                     className="w-full h-auto max-h-48 object-cover rounded-md mb-2 border border-gray-200" 
+                     alt="Attached context" 
+                   />
+                  )}
+                  {m.role === 'model' ? (
+                    <div className="markdown-body text-[15px] leading-relaxed break-words">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkMath]}
+                        rehypePlugins={[rehypeKatex]}
+                        components={{
+                          p: ({ node, ...props }) => <p className="mb-2 last:mb-0" {...props} />,
+                          a: ({ node, ...props }) => <a className="text-indigo-600 hover:underline" {...props} />,
+                          ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2 last:mb-0" {...props} />,
+                          ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-2 last:mb-0" {...props} />,
+                          li: ({ node, ...props }) => <li className="mb-1" {...props} />,
+                        }}
+                      >
+                        {m.content}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    m.content
+                  )}
+                </div>
+              </motion.div>
+            ))}
+            {activeSession && !isTyping && (
+               <div className="flex justify-start">
+                  <button onClick={revealHint} className="ml-2 mt-1 px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-semibold rounded-full hover:bg-yellow-200 transition shadow-sm">
+                     Ask for Hint
+                  </button>
+               </div>
+            )}
+            <div ref={messagesEndRef} className="h-1" />
+          </div>
         </div>
       </div>
 
@@ -262,10 +304,19 @@ export default function ChatPage() {
 
             <div className="flex items-end gap-2 bg-gray-50 border border-gray-200 rounded-3xl pl-3 pr-2 py-2 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
               <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="p-3 text-slate-400 hover:text-slate-600 rounded-full hover:bg-white transition shrink-0"
+                onClick={() => cameraInputRef.current?.click()}
+                className="p-3 text-slate-400 hover:text-indigo-600 rounded-full hover:bg-white transition shrink-0 bg-transparent relative group"
+                title="Use Camera"
               >
-                <Camera className="w-6 h-6" />
+                <Camera className="w-5 h-5" />
+              </button>
+
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="p-3 text-slate-400 hover:text-indigo-600 rounded-full hover:bg-white transition shrink-0 bg-transparent -ml-2"
+                title="Upload Image"
+              >
+                <ImagePlus className="w-5 h-5" />
               </button>
               
               <input
@@ -273,6 +324,15 @@ export default function ChatPage() {
                 accept="image/*"
                 className="hidden"
                 ref={fileInputRef}
+                onChange={handleImageSelect}
+              />
+
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                ref={cameraInputRef}
                 onChange={handleImageSelect}
               />
 
