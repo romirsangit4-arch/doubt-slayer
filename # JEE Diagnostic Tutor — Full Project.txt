@@ -1,0 +1,490 @@
+# JEE Diagnostic Tutor — Full Project Blueprint
+
+---
+
+## 1. Product Thesis
+
+We are not building an ed-tech app. We are building an **AI-native tutoring service** where the AI is the tutor, the diagnostician, and the bookkeeper. The business is a conversation. A student pays for a session where an AI finds their exact fault line in a JEE problem, repairs it with micro-examples, and co-constructs the solution with them. The AI makes all pedagogical decisions in real time. Human involvement is limited to billing and quality oversight.
+
+---
+
+## 2. The Pedagogical Engine (Core IP)
+
+This is the product. The code is just the container.
+
+### 2.1 The Three-Act Session State Machine
+
+Every session moves through three acts. The backend maintains the act in a `session_state` field.
+
+| Act | Name | AI Behavior | Student Experience |
+|-----|------|-------------|-------------------|
+| **Act 1** | **Diagnosis** | Asks 2–4 sharp, multiple-choice or one-word questions targeting the exact step where the solution breaks. | "Why did you take the moment about point A and not B?" |
+| **Act 2** | **Fragment Repair** | Generates a 2-minute micro-example targeting the exact gap. Waits for student to solve it. | Solves a tiny, isolated problem in chat. |
+| **Act 3** | **Reconstruction** | Returns to the original problem. Co-builds solution via Socratic questioning. Step size adapts to student confidence. | Rebuilds the original problem step-by-step with AI only asking, never telling. |
+
+### 2.2 Conversation Discipline
+
+- **No paragraphs.** AI responses are capped at 2–3 lines (max 60 words).
+- **No direct answers.** The AI must never say "The answer is 5 m/s²." It asks: "What is the net force? Divide by mass."
+- **Variable Granularity.** The AI internally scores student confidence (0–1) per step. High confidence → next prompt asks for 2–3 steps at once. Low confidence → next prompt isolates a single variable substitution.
+- **The 3-Strike Rule.** If a student fails a gate in Act 3 three times, the AI does not reveal the answer. It retreats to a new micro-example (Act 2 loop), repairs the deeper sub-gap, and returns.
+
+### 2.3 JEE-Specific Adaptations
+
+- **Image-first input.** JEE problems are diagram-heavy. The student must be able to snap a photo of HC Verma, Irodov, or coaching sheets.
+- **Syllabus-aware taxonomy.** The AI does not guess topics. It maps every problem to a node in the JEE (Main + Advanced) syllabus tree. This enables the Student Knowledge Map.
+- **Hinglish tolerance.** Students often type in Romanized Hindi-English mix. The AI responds in crisp English but understands hybrid input.
+
+---
+
+## 3. Tech Stack
+
+| Layer | Technology | Rejected Alternatives | Reasoning |
+|-------|-----------|----------------------|-----------|
+| **Frontend** | Next.js 14 (App Router) | React Native, Flutter, Vue | Mobile web is zero-friction for JEE students. Next.js SSR gives fast first paint on 4G. Can be wrapped as PWA later. |
+| **Backend** | FastAPI (Python 3.11+) | Node.js/Express, Django | Native async/await. Best-in-class Gemini SDK support. Clean dependency injection for prompt management. |
+| **AI Model** | Gemini 1.5 Pro (Vision + Reasoning) | GPT-4V, Claude 3 | Hackathon is Gemini xprize. Pro handles complex physics reasoning. Flash can be used for low-latency micro-interactions later. |
+| **Database** | Firestore (Native Mode) | PostgreSQL, MongoDB | Document store fits chat history and nested knowledge maps. Real-time sync if we add live dashboards. Serverless scaling. |
+| **Object Storage** | Google Cloud Storage | AWS S3 | Same project as Firestore/Cloud Run. Signed URLs for direct browser upload. |
+| **Auth** | Firebase Authentication | Auth0, Clerk | Phone-number OTP is the standard in India. Firebase handles SMS cost and delivery. |
+| **Payments** | Razorpay | Stripe, PayPal | UPI is 80% of Indian digital payments. Razorpay is the developer standard. |
+| **Deployment** | Cloud Run | GKE, EC2 | Serverless containers. Scales to zero (cost control during hackathon). Automatic HTTPS. |
+| **CI/CD** | GitHub Actions + Cloud Build | Jenkins, CircleCI | Free for public repos. Tight GCP integration. |
+| **Monitoring** | Cloud Logging + Error Reporting | Datadog, Sentry | Included in GCP. No extra cost. |
+
+---
+
+## 4. System Architecture
+
+### 4.1 High-Level Data Flow
+
+```
+┌─────────────────┐
+│  Student Phone  │
+│ (Mobile Chrome) │
+└────────┬────────┘
+         │
+    ┌────▼────┐
+    │ Cloud   │  CDN / Edge Cache (Firebase Hosting)
+    │ CDN     │
+    └────┬────┘
+         │
+    ┌────▼────────────────────────────┐
+    │  Next.js Frontend (Cloud Run) │
+    │  - Chat UI                    │
+    │  - Image Uploader             │
+    │  - PWA Shell                  │
+    └────┬──────────────────────────┘
+         │ HTTPS / JSON + SSE
+    ┌────▼────────────────────────────┐
+    │  FastAPI Backend (Cloud Run)  │
+    │  - Session Orchestrator       │
+    │  - Prompt Engine              │
+    │  - Payment Webhooks           │
+    └────┬──────────────────────────┘
+         │
+    ┌────┼────┬─────────────┐
+    │    │    │             │
+┌───▼──┐ │ ┌──▼────┐   ┌───▼────┐
+│Gemini│ │ │Firestore│   │ Cloud  │
+│ API  │ │ │         │   │Storage │
+└──────┘ │ └─────────┘   └────────┘
+         │
+    ┌────▼────┐
+    │Razorpay │
+    └─────────┘
+```
+
+### 4.2 Component Breakdown
+
+**Frontend (Next.js)**
+- `ChatInterface`: Core component. Handles SSE stream rendering, typing indicators, and message bubbles.
+- `ImageUploader`: Compresses images client-side (max 2MB), requests signed URL from backend, uploads directly to GCS.
+- `TopicSelector`: Searchable JEE syllabus tree. Used when student skips image upload.
+- `SessionReview`: Post-session "Mastery Card" with exportable summary.
+- `PaywallModal`: Triggered after Act 1 completion of free session.
+
+**Backend (FastAPI)**
+- `orchestrator.py`: Session state machine. Decides which act to invoke based on conversation history.
+- `diagnostic_engine.py`: Act 1. Parses problem + student responses to output `ConceptualGap` objects.
+- `fragment_builder.py`: Act 2. Generates micro-examples given a gap.
+- `reconstruction_guide.py`: Act 3. Socratic scaffolding with variable step size.
+- `image_parser.py`: Pre-processes image for Gemini vision. Adds OCR confidence metadata.
+- `payment_service.py`: Razorpay order creation, webhook verification, entitlement checks.
+- `knowledge_map.py`: Updates `StudentKnowledgeMap` after every session.
+
+---
+
+## 5. Data Architecture (Firestore)
+
+### 5.1 Collections
+
+```
+students/{student_id}
+  - phone_number: string
+  - target_exam: "JEE_MAIN" | "JEE_ADVANCED" | "CLASS_11" | "CLASS_12"
+  - created_at: timestamp
+  - knowledge_map: map<<topic_id, {mastery_score: float, last_assessed: timestamp}>
+
+sessions/{session_id}
+  - student_id: ref
+  - status: "DIAGNOSING" | "REPAIRING" | "RECONSTRUCTING" | "COMPLETED" | "ABANDONED"
+  - input_type: "IMAGE" | "TEXT" | "TOPIC"
+  - problem_image_url: string (GCS)
+  - problem_text: string (OCR + human fallback)
+  - detected_topic: ref(syllabus)
+  - detected_subtopic: ref(syllabus)
+  - gaps_found: array<<map>
+  - current_act: int (1-3)
+  - step_confidence: float (0-1, rolling)
+  - created_at: timestamp
+  - ended_at: timestamp
+  - paid: boolean
+
+messages/{message_id} (subcollection under sessions)
+  - role: "system" | "ai" | "student"
+  - content: string
+  - message_type: "diagnostic_question" | "micro_example" | "scaffold_prompt" | "hint" | "student_answer"
+  - timestamp: timestamp
+  - act: int
+
+micro_examples/{example_id} (subcollection under sessions)
+  - gap_id: string
+  - problem_statement: string
+  - solution_steps: array<string>
+  - student_solved_correctly: boolean
+
+payments/{payment_id}
+  - student_id: ref
+  - session_id: ref
+  - razorpay_order_id: string
+  - amount_inr: int
+  - status: "created" | "paid" | "failed"
+  - verified_at: timestamp
+```
+
+### 5.2 Design Reasoning
+
+- **Subcollections for messages:** A JEE session can have 50+ messages. Storing them in a subcollection keeps `sessions` documents small and fast to read.
+- **Knowledge map as a map field:** Denormalized for fast reads. Updated incrementally after each session. The AI loads this at session start to personalize diagnostics.
+- **No relational joins:** Firestore is document-native. We duplicate minimal data (e.g., `detected_topic` string in `sessions`) to avoid joins.
+
+---
+
+## 6. AI Service Architecture
+
+### 6.1 Prompt Management Strategy
+
+Prompts are stored as `.txt` files in `/backend/core/prompts/` and versioned by filename.
+
+```
+prompts/
+├── v1/
+│   ├── system_identity.txt      # "You are a stubborn JEE tutor..."
+│   ├── act1_diagnostic.txt      # Rules for gap detection
+│   ├── act2_fragment.txt        # Rules for micro-example generation
+│   ├── act3_reconstruction.txt  # Rules for Socratic scaffolding
+│   └── output_schemas/          # JSON schemas for structured output
+```
+
+**Reasoning:** Hardcoding prompts in Python strings leads to messy diffs and hotfix hell. Files allow A/B testing and non-engineer tuning.
+
+### 6.2 Structured Output via Gemini
+
+For Act 1 and Act 2, we use Gemini's **JSON mode** (or constrained generation) to guarantee machine-parseable output.
+
+**Act 1 Output Schema:**
+```json
+{
+  "gaps": [
+    {
+      "concept": "moment of inertia about a moving axis",
+      "severity": "blocking",
+      "diagnostic_question": "When the axis moves, which theorem must you apply?",
+      "expected_answer_type": "one_word"
+    }
+  ],
+  "recommended_act2_topic": "parallel_axis_theorem"
+}
+```
+
+**Reasoning:** Unstructured text from LLMs is unreliable for state machines. We force JSON so the orchestrator can decide the next act without parsing prose.
+
+### 6.3 Vision Pipeline
+
+1. Student uploads image → Frontend requests signed URL from `/upload-url` → Uploads to GCS.
+2. Backend sends image to Gemini with prompt: *"Extract the problem statement, identify the topic using the JEE syllabus, and list the physical quantities and diagrams present."*
+3. Output is stored in `sessions.problem_text` and `sessions.detected_topic`.
+4. If OCR confidence < 0.8, the AI asks the student: *"I read the problem as [X]. Is this correct?"*
+
+**Reasoning:** JEE problems often have handwritten notes or low-quality scans. A validation step prevents the AI from diagnosing the wrong problem.
+
+### 6.4 Context Window Management
+
+A JEE session can exceed 50 turns. We cannot send the full history every time (cost + latency).
+
+- **Sliding window:** Keep last 10 messages in context.
+- **Session summary:** After every act transition, Gemini generates a 100-word summary of the session so far. This summary replaces the dropped history.
+- **Knowledge map injection:** The student's mastery scores for the detected topic are injected as a system message at the start of every API call.
+
+---
+
+## 7. Frontend Architecture
+
+### 7.1 State Management
+
+- **Zustand** for global state: auth, current session, payment status.
+- **React Query (TanStack Query)** for server state: message history, session list.
+- **Local component state** for input composition.
+
+**Reasoning:** Zustand is lighter than Redux. React Query handles caching, background refetching, and optimistic updates for chat messages.
+
+### 7.2 Real-Time Chat
+
+- **Server-Sent Events (SSE)** for AI response streaming.
+- Not WebSockets. SSE is HTTP-based, works through corporate/college firewalls, and is simpler to implement for one-way streaming (AI → student).
+
+### 7.3 Mobile-First Design Choices
+
+- **Input area:** 56dp minimum touch targets. Camera button is primary; keyboard is secondary.
+- **Dark mode default:** JEE students study at night. Reduces eye strain and makes the app feel premium.
+- **WhatsApp-style bubbles:** Familiar mental model. AI on left, student on right.
+- **No infinite scroll in chat:** Sessions are bounded (20–40 min). Paginate history only for "Past Sessions" screen.
+- **Image preview:** Thumbnail of uploaded problem stays pinned at top of chat for reference.
+
+### 7.4 PWA Configuration
+
+- `manifest.json` with `display: standalone`.
+- Service worker for offline session history viewing.
+- Add-to-home-screen prompt after 2nd session.
+
+**Reasoning:** A PWA gives 80% of native app utility with 10% of the effort. For a 2-month hackathon, this is the correct tradeoff.
+
+---
+
+## 8. Backend Architecture
+
+### 8.1 FastAPI App Structure
+
+```
+backend/
+├── app/
+│   ├── main.py
+│   ├── dependencies.py          # DB client, Gemini client, auth
+│   ├── routers/
+│   │   ├── sessions.py          # POST /sessions, GET /sessions/{id}
+│   │   ├── chat.py              # POST /chat/stream (SSE endpoint)
+│   │   ├── upload.py            # GET /upload-url (signed GCS URL)
+│   │   └── payments.py          # POST /payments, POST /webhooks/razorpay
+│   ├── services/
+│   │   ├── gemini_client.py     # Singleton wrapper around Google GenAI SDK
+│   │   ├── orchestrator.py      # The state machine
+│   │   ├── diagnostic_engine.py
+│   │   ├── fragment_builder.py
+│   │   ├── reconstruction_guide.py
+│   │   ├── image_parser.py
+│   │   └── knowledge_service.py
+│   ├── models/
+│   │   └── schemas.py           # Pydantic models for all requests/responses
+│   └── core/
+│       ├── config.py
+│       └── prompts/
+├── Dockerfile
+└── requirements.txt
+```
+
+### 8.2 The Chat Endpoint (`POST /chat/stream`)
+
+This is the heart of the application.
+
+```python
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    # 1. Load session + student knowledge map
+    session = await get_session(request.session_id)
+    student = await get_student(session.student_id)
+    
+    # 2. Check payment (if not free session)
+    if not await is_entitled(session.student_id):
+        raise HTTPException(402, "Payment required")
+    
+    # 3. Determine act via orchestrator
+    act = orchestrator.decide_act(session, request.student_message)
+    
+    # 4. Build prompt for the act
+    prompt = prompt_builder.build(act, session, request.student_message)
+    
+    # 5. Stream Gemini response
+    async def event_generator():
+        full_response = ""
+        async for chunk in gemini_client.generate_stream(prompt):
+            full_response += chunk
+            yield f"data: {chunk}\n\n"
+        
+        # 6. After stream ends, parse structured output, update DB
+        parsed = parse_response(full_response, act)
+        await save_message(session.id, parsed)
+        await update_session_state(session.id, act, parsed)
+    
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+```
+
+### 8.3 Async Design
+
+- All I/O (DB, Gemini API, Razorpay) is `asyncio`.
+- **Reasoning:** A tutoring session is I/O-bound, not CPU-bound. FastAPI's async handling allows a single Cloud Run instance to manage hundreds of concurrent sessions without blocking.
+
+---
+
+## 9. DevOps & Deployment
+
+### 9.1 Environment Strategy
+
+| Environment | URL | Purpose |
+|-------------|-----|---------|
+| `dev` | `dev.jeetutor.in` | Local tunnel (ngrok) or Cloud Run dev service |
+| `staging` | `staging.jeetutor.in` | Pre-production, team testing |
+| `prod` | `jeetutor.in` | Live users, payment enabled |
+
+### 9.2 CI/CD Pipeline (GitHub Actions)
+
+```yaml
+# .github/workflows/deploy.yml
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: jee-tutor-backend
+          region: asia-south1  # Mumbai
+          source: ./backend
+```
+
+**Reasoning:** Mumbai region minimizes latency for Indian users. Cloud Run deploys from source code—no manual container builds.
+
+### 9.3 Infrastructure as Code (Optional)
+
+- Use **Terraform** or **GCP Deployment Manager** only if time permits in week 3.
+- For hackathon speed, manual GCP console setup is acceptable. Document every step in `INFRA_SETUP.md`.
+
+---
+
+## 10. Security & Compliance
+
+| Concern | Mitigation |
+|---------|-----------|
+| **Phone OTP** | Firebase Auth handles SMS securely. No passwords stored. |
+| **Image uploads** | GCS signed URLs expire in 15 minutes. Bucket is private. |
+| **Payment data** | Razorpay handles PCI compliance. We store only order IDs. |
+| **Student data privacy** | Firestore security rules: users can only read their own sessions. |
+| **Prompt injection** | System prompts are never exposed to frontend. Student input is treated as untrusted and passed through a sanitization layer. |
+| **Minors** | JEE students are 16–18. We collect minimal PII (phone only). No email required. |
+
+---
+
+## 11. Monetization & Business Logic
+
+### 11.1 Pricing Engine
+
+```python
+# Simplified pricing model
+PRICING = {
+    "free_trial": 1,           # 1 full session free
+    "per_session": 50,         # INR
+    "weekly_pass": 199,        # INR, unlimited sessions
+    "monthly_pass": 699,       # INR
+}
+```
+
+**Reasoning:** ₹50 is an impulse purchase. A student will pay it without asking parents. Weekly pass creates commitment and reduces per-session transaction friction.
+
+### 11.2 Payment Flow
+
+1. After Act 1 of the free session, show paywall: *"Continue to repair and solve — ₹50"*
+2. Razorpay checkout opens (UPI intent flow on mobile).
+3. On webhook confirmation, Firestore `payments` document updates.
+4. Backend `is_entitled()` checks for active pass or paid session.
+
+### 11.3 Revenue Tracking for Hackathon
+
+- Every payment is logged with `acquisition_channel` (WhatsApp, Reddit, Instagram).
+- Daily revenue dashboard in a simple admin page.
+- **Hackathon metric:** Real revenue in INR, converted to USD for judges.
+
+---
+
+## 12. Development Roadmap
+
+### Phase 0: Foundation (Days 1–3)
+- [ ] GCP project setup, Firestore schema, Cloud Run services
+- [ ] Firebase Auth phone OTP working
+- [ ] Next.js skeleton + dark mode chat UI
+- [ ] Image upload pipeline (signed URLs → GCS)
+
+### Phase 1: The Core Loop (Days 4–10)
+- [ ] Gemini vision parsing for 1 topic (Rotational Mechanics)
+- [ ] Act 1: Diagnostic engine with structured JSON output
+- [ ] Act 2: Fragment builder + micro-example generation
+- [ ] Act 3: Reconstruction guide with variable step size
+- [ ] End-to-end session: image → diagnosis → repair → solved
+
+### Phase 2: The Business Shell (Days 11–17)
+- [ ] Razorpay integration
+- [ ] Free session + paywall logic
+- [ ] Session persistence in Firestore
+- [ ] Mastery Card generation
+- [ ] Landing page (`jeetutor.in`)
+
+### Phase 3: Expansion (Days 18–30)
+- [ ] Expand to 5 topics: Electrostatics, Organic Chemistry Nomenclature, Calculus (Limits), Thermodynamics, Kinematics
+- [ ] Student Knowledge Map visualization
+- [ ] Voice input (optional, Hinglish recognition)
+- [ ] PWA packaging
+
+### Phase 4: Growth & Revenue (Days 31–60)
+- [ ] WhatsApp shareable session summaries
+- [ ] Referral program: 1 free session per friend
+- [ ] Post in r/JEE, Quora, Telegram groups
+- [ ] Instagram Reels content (before/after screenshots)
+- [ ] Target: 100+ paying users, ₹10,000+ revenue
+
+### Phase 5: Scale & Pitch (Days 61–90)
+- [ ] Full JEE syllabus coverage (Physics, Chemistry, Mathematics)
+- [ ] Analytics dashboard for weak areas
+- [ ] AI quality monitoring (human spot-checks 5% of sessions)
+- [ ] Pitch deck with revenue, retention, and user testimonials
+
+---
+
+## 13. Anti-Fragility & Fallbacks
+
+| Failure Mode | Fallback |
+|--------------|----------|
+| **Gemini hallucinates physics** | A `physics_validator` layer checks if Gemini's proposed solution matches the known answer key (if available). If mismatch, prompt is retried with temperature 0.1. |
+| **Student uploads unreadable image** | AI asks for clarification. If 2 failures, offer text input fallback. |
+| **Student is completely lost** | AI detects 3 consecutive failures and retreats to a simpler prerequisite micro-example. Never gives the answer. |
+| **Payment fails** | Retry Razorpay once. If still fails, offer "Pay later" (1 session credit) to reduce drop-off. |
+| **High latency (>5s)** | Show typing indicator immediately. Use Gemini 1.5 Flash for Act 1 diagnostics to reduce time-to-first-question. |
+| **Gemini API downtime** | Circuit breaker: after 3 failures, show user "Tutor is taking a break. Retry in 2 minutes." |
+
+---
+
+## 14. Alignment with Hackathon Judging Criteria
+
+| Criterion | How We Satisfy It |
+|-----------|-------------------|
+| **Business Viability** | Real pricing (₹50/session). Real Indian market (1.5M JEE students). Revenue trackable from day 14. |
+| **AI-Native Operations** | AI is the tutor, diagnostician, and content generator. No human tutors. The business runs through prompts and state machines. |
+| **Category Impact** | Redefines the feedback loop in test prep. Not a content library—a live diagnostic service. Scales to every student who cannot afford ₹1,000/hour tutoring. |
+
+---
+
