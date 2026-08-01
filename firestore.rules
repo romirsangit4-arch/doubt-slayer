@@ -5,38 +5,47 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
+    function isValidTargetExam(exam) {
+      return exam in ['jee-mains', 'jee-advanced', 'cbse-12'];
+    }
 
     match /users/{userId} {
       allow get: if isSignedIn() && request.auth.uid == userId && isValidId(userId);
       allow create: if isSignedIn() && request.auth.uid == userId && isValidId(userId) &&
-        incoming().keys().hasAll(['email', 'createdAt']) && incoming().keys().size() == 2 &&
+        incoming().keys().hasAll(['email', 'createdAt']) &&
         incoming().email is string && incoming().email.size() <= 200 &&
         incoming().createdAt == request.time;
+      allow update: if isSignedIn() && request.auth.uid == userId && isValidId(userId) &&
+        incoming().email == existing().email &&
+        incoming().createdAt == existing().createdAt &&
+        (!('targetExam' in incoming()) || isValidTargetExam(incoming().targetExam)) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['targetExam', 'updatedAt']);
     }
 
     match /sessions/{sessionId} {
       allow get: if isSignedIn() && resource.data.userId == request.auth.uid && isValidId(sessionId);
       allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow create: if isSignedIn() && isValidId(sessionId) && 
-        incoming().keys().hasAll(['userId', 'createdAt', 'updatedAt']) &&
-        incoming().userId is string && incoming().userId == request.auth.uid &&
+      allow create: if isSignedIn() && isValidId(sessionId) &&
+        incoming().keys().hasAll(['userId', 'targetExam', 'title', 'state', 'phase', 'topic', 'date', 'messages', 'createdAt', 'updatedAt']) &&
+        incoming().userId == request.auth.uid &&
+        isValidTargetExam(incoming().targetExam) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid));
-      
-      allow update: if isSignedIn() && isValidId(sessionId) && 
+      allow update: if isSignedIn() && isValidId(sessionId) &&
         resource.data.userId == request.auth.uid &&
         incoming().userId == existing().userId &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        (incoming().diff(existing()).affectedKeys().hasOnly(['problem_text', 'detected_topic', 'imageBase64_preview', 'updatedAt', 'messages']));
-      
+        isValidTargetExam(incoming().targetExam);
       allow delete: if isSignedIn() && resource.data.userId == request.auth.uid && isValidId(sessionId);
     }
   }

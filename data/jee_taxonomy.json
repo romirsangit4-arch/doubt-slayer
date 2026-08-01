@@ -1,0 +1,124 @@
+{
+  "subjects": [
+    {
+      "id": "physics",
+      "name": "Physics",
+      "topics": [
+        {
+          "id": "rotational_dynamics",
+          "name": "Rotational Dynamics",
+          "concepts": [
+            {
+              "concept_id": "fbd_construction",
+              "concept_name": "Free Body Diagram Construction",
+              "concept_weight": 0.8,
+              "prerequisites": [],
+              "common_misconceptions": [
+                "Drawing pseudo forces in inertial frames",
+                "Incorrect direction of static friction for rolling bodies"
+              ],
+              "estimated_learning_minutes": 5,
+              "question_types": ["MCQ", "Numerical"]
+            },
+            {
+              "concept_id": "torque_definition",
+              "concept_name": "Definition of Torque (Cross Product)",
+              "concept_weight": 1.0,
+              "prerequisites": ["fbd_construction"],
+              "common_misconceptions": [
+                "Taking perpendicular distance from the wrong axis",
+                "Sign errors in cross product"
+              ],
+              "estimated_learning_minutes": 10,
+              "question_types": ["MCQ", "Numerical"]
+            },
+            {
+              "concept_id": "newtons_second_law_rotation",
+              "concept_name": "Newton's Second Law for Rotation (tau = I*alpha)",
+              "concept_weight": 1.5,
+              "prerequisites": ["torque_definition", "moment_of_inertia_calculation"],
+              "common_misconceptions": [
+                "Using mass instead of moment of inertia",
+                "Applying about an accelerating axis without pseudo-torque"
+              ],
+              "estimated_learning_minutes": 15,
+              "question_types": ["Numerical", "Subjective"]
+            },
+            {
+              "concept_id": "moment_of_inertia_calculation",
+              "concept_name": "Calculation of Moment of Inertia",
+              "concept_weight": 1.2,
+              "prerequisites": [],
+              "common_misconceptions": [
+                "Forgetting parallel axis theorem",
+                "Wrong standard formula (e.g. cylinder vs sphere)"
+              ],
+              "estimated_learning_minutes": 10,
+              "question_types": ["MCQ", "Numerical"]
+            },
+            {
+              "concept_id": "rolling_without_slipping",
+              "concept_name": "Kinematics of Rolling Without Slipping",
+              "concept_weight": 1.8,
+              "prerequisites": ["newtons_second_law_rotation"],
+              "common_misconceptions": [
+                "Assuming v = R*omega applies to slipping",
+                "Incorrect relation between acceleration and angular acceleration (a = R*alpha)"
+              ],
+              "estimated_learning_minutes": 20,
+              "question_types": ["Numerical", "Subjective"]
+            },
+            {
+              "concept_id": "conservation_of_angular_momentum",
+              "concept_name": "Conservation of Angular Momentum",
+              "concept_weight": 1.5,
+              "prerequisites": ["torque_definition"],
+              "common_misconceptions": [
+                "Conserving when external torque is present",
+                "Incorrect choice of origin"
+              ],
+              "estimated_learning_minutes": 15,
+              "question_types": ["MCQ", "Numerical"]
+            },
+            {
+              "concept_id": "rotational_kinetic_energy",
+              "concept_name": "Rotational Kinetic Energy",
+              "concept_weight": 1.0,
+              "prerequisites": ["moment_of_inertia_calculation"],
+              "common_misconceptions": [
+                "Forgetting the 1/2 factor",
+                "Missing translational KE for a rolling body"
+              ],
+              "estimated_learning_minutes": 10,
+              "question_types": ["MCQ", "Numerical"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mathematics",
+      "name": "Mathematics",
+      "topics": [
+        {
+          "id": "integral_calculus",
+          "name": "Integral Calculus",
+          "concepts": [
+            {
+              "concept_id": "definite_integral_bounds",
+              "concept_name": "Definite Integral Bounds Setup",
+              "concept_weight": 1.2,
+              "prerequisites": [],
+              "common_misconceptions": [
+                "Not changing bounds when performing u-substitution",
+                "Reversing upper and lower limits"
+              ],
+              "estimated_learning_minutes": 10,
+              "question_types": ["MCQ", "Numerical"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

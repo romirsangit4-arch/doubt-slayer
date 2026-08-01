@@ -29,12 +29,45 @@ import {
   Image as ImageIcon,
   FileText,
   ChevronRight,
+  ChevronDown,
   LogOut,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { cn } from '@/lib/utils';
+import { useFirebase } from '@/components/firebase-provider';
+import {
+  EXAM_OPTIONS,
+  getChatPlaceholder,
+  getExamWorkspaceLabel,
+  getSyllabusMapTitle,
+  parseTargetExam,
+  type TargetExam,
+} from '@/lib/exams';
+import {
+  deleteSessionFromFirestore,
+  loadUserSessions,
+  loadUserTargetExam,
+  saveUserTargetExam,
+  upsertSession,
+} from '@/lib/firestore/sessions';
+import {
+  EXAM_SUBJECT_STATS,
+  INITIAL_SESSIONS_BY_EXAM,
+  countGaps,
+  countResolved,
+  filterSessionsBySubject,
+  type DashboardSession,
+  type SessionPhase,
+} from '@/lib/exam-dashboard';
 import Latex from 'react-latex-next';
 import 'katex/dist/katex.min.css';
+import type { SolutionContext, DiagnosticBattery, MicroExampleSet, ReconstructionScaffold, SessionCoverage, AssessmentLogEntry } from '@/types/engine';
+import { PhaseProgressBar } from '@/components/engine/PhaseProgressBar';
+import { DiagnosisPanel, type DiagnosisResult } from '@/components/engine/DiagnosisPanel';
+import { RepairPanel, type RepairResult } from '@/components/engine/RepairPanel';
+import { ReconstructionPanel, type ReconstructionResult } from '@/components/engine/ReconstructionPanel';
+import { ResolutionPanel } from '@/components/engine/ResolutionPanel';
+import { Loader2 } from 'lucide-react';
 
 type View = 'landing' | 'dashboard' | 'chat';
 
@@ -45,15 +78,7 @@ type ChatMessage = {
   meta?: string;
 };
 
-type Session = {
-  id: string;
-  title: string;
-  state: 'Act 1: Diagnosis' | 'Act 2: Fragment Repair' | 'Act 3: Reconstruction' | 'Completed';
-  messages: ChatMessage[];
-  topic: string;
-  date: string;
-  hasImage?: boolean;
-};
+type Session = DashboardSession;
 
 type Attachment = {
   name: string;
@@ -86,92 +111,38 @@ const learningNotes = [
 ];
 
 export default function Home() {
+  const { user: firebaseUser, loading: authLoading, signInWithGoogle, logout } = useFirebase();
   const [view, setView] = useState<View>('landing');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [mounted, setMounted] = useState(false);
-  const [user, setUser] = useState<{ name: string; email: string; provider: 'google' | 'guest' } | null>(null);
+  const [guestProfile, setGuestProfile] = useState<{
+    name: string;
+    email: string;
+    provider: 'guest';
+  } | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [targetExam, setTargetExam] = useState<TargetExam>('jee-mains');
+  const [sessionsByExam, setSessionsByExam] = useState(INITIAL_SESSIONS_BY_EXAM);
 
-  // Dynamic session list state
-  const [sessions, setSessions] = useState<Session[]>([
-    {
-      id: 'session-1',
-      title: 'Rotational torque of cylinder',
-      state: 'Act 1: Diagnosis',
-      topic: 'Mechanics',
-      date: 'Today',
-      hasImage: true,
-      messages: [
-        {
-          id: 'm1',
-          role: 'tutor',
-          content: 'Here is a diagram from HC Verma. Let us check the moment of inertia about the moving cylinder axis. Why did you choose point A?',
-          meta: '10:30 AM'
-        },
-        {
-          id: 'm2',
-          role: 'student',
-          content: 'Because point A is the instantaneous center of zero velocity.',
-          meta: '10:32 AM'
+  const sessions = sessionsByExam[targetExam];
+  const user =
+    guestProfile ??
+    (firebaseUser
+      ? {
+          name: firebaseUser.displayName || 'Student',
+          email: firebaseUser.email || '',
+          provider: 'google' as const,
         }
-      ]
-    },
-    {
-      id: 'session-2',
-      title: 'Definite integration bounds',
-      state: 'Act 3: Reconstruction',
-      topic: 'Calculus',
-      date: 'Yesterday',
-      messages: [
-        {
-          id: 'n1',
-          role: 'tutor',
-          content: 'If the charge density is non-uniform, what is the integration element $dq$?',
-          meta: '3:15 PM'
-        },
-        {
-          id: 'n2',
-          role: 'student',
-          content: 'It should be $dq = \\sigma(r) \\cdot 2\\pi r dr$.',
-          meta: '3:16 PM'
-        }
-      ]
-    },
-    {
-      id: 'session-3',
-      title: 'Organic ether nomenclature rules',
-      state: 'Completed',
-      topic: 'Chemistry',
-      date: '2 days ago',
-      messages: [
-        {
-          id: 'c1',
-          role: 'tutor',
-          content: 'When naming an ether with an alkoxy group, which carbon chain is chosen as the parent alkane?',
-          meta: '11:00 AM'
-        },
-        {
-          id: 'c2',
-          role: 'student',
-          content: 'The parent alkane should be the longest continuous carbon chain.',
-          meta: '11:02 AM'
-        },
-        {
-          id: 'c3',
-          role: 'tutor',
-          content: 'Correct! The alkoxy group becomes a substituent. So how would you name $\\text{CH}_3-\\text{O}-\\text{CH}_2\\text{CH}_3$?',
-          meta: '11:03 AM'
-        },
-        {
-          id: 'c4',
-          role: 'student',
-          content: 'It is methoxyethane.',
-          meta: '11:04 AM'
-        }
-      ]
-    }
-  ]);
+      : null);
+
+  const setSessions = (updater: Session[] | ((prev: Session[]) => Session[])) => {
+    setSessionsByExam((prev) => {
+      const current = prev[targetExam];
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      return { ...prev, [targetExam]: next };
+    });
+  };
 
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -180,78 +151,76 @@ export default function Home() {
   const [isComposing, setIsComposing] = useState(false);
   const [activeSubject, setActiveSubject] = useState<'all' | 'physics' | 'chemistry' | 'math'>('all');
 
+  // ===== 5-Phase Diagnostic Engine State =====
+  const [enginePhase, setEnginePhase] = useState<SessionPhase | null>(null);
+  const [engineLoading, setEngineLoading] = useState(false);
+  const [engineError, setEngineError] = useState<string | null>(null);
+  const [solutionContext, setSolutionContext] = useState<SolutionContext | null>(null);
+  const [diagnosticBattery, setDiagnosticBattery] = useState<DiagnosticBattery | null>(null);
+  const [microExampleSet, setMicroExampleSet] = useState<MicroExampleSet | null>(null);
+  const [reconstructionScaffold, setReconstructionScaffold] = useState<ReconstructionScaffold | null>(null);
+  const [sessionCoverage, setSessionCoverage] = useState<SessionCoverage | null>(null);
+  const [assessmentLog, setAssessmentLog] = useState<AssessmentLogEntry[]>([]);
+  const [repairResults, setRepairResults] = useState<{ concept_id: string; solved: boolean }[]>([]);
+  const [reconstructionResults, setReconstructionResults] = useState<{ step_number: number; completed: boolean; hints_used: number }[]>([]);
+
+  const isEngineMode = enginePhase !== null;
+
+  const resetEngineState = () => {
+    setEnginePhase(null);
+    setEngineLoading(false);
+    setEngineError(null);
+    setSolutionContext(null);
+    setDiagnosticBattery(null);
+    setMicroExampleSet(null);
+    setReconstructionScaffold(null);
+    setSessionCoverage(null);
+    setAssessmentLog([]);
+    setRepairResults([]);
+    setReconstructionResults([]);
+  };
+
   const subjectStats = useMemo(() => {
-    return {
-      all: {
-        resolved: sessions.filter(s => s.state === 'Completed').length,
-        streak: '4 days',
-        gaps: sessions.length,
-        accuracy: 74,
-        benchmarkText: 'You successfully identify torque, isomers, and integration bounds on the first attempt 74% of the time.',
-        accuracyLabel: 'Combined accuracy index',
-        knowledgeMap: [
-          { topic: 'Mechanics (Rotational, Kinematics)', value: '76%', color: 'bg-emerald-500' },
-          { topic: 'Electrostatics (Field flux, Capacitance)', value: '58%', color: 'bg-cyan-500' },
-          { topic: 'Calculus (Definite integral bounds)', value: '40%', color: 'bg-amber-500' },
-          { topic: 'Organic Chemistry (Nomenclature)', value: '12%', color: 'bg-rose-500' },
-        ]
-      },
-      physics: {
-        resolved: sessions.filter(s => s.state === 'Completed' && (s.topic === 'Mechanics' || s.topic === 'Electrostatics')).length,
-        streak: '3 days',
-        gaps: sessions.filter(s => s.topic === 'Mechanics' || s.topic === 'Electrostatics').length,
-        accuracy: 82,
-        benchmarkText: 'You successfully identify dynamic torque axis constraints on the first attempt 82% of the time.',
-        accuracyLabel: 'Physics accuracy index',
-        knowledgeMap: [
-          { topic: 'Mechanics (Rotational Dynamics)', value: '76%', color: 'bg-emerald-500' },
-          { topic: 'Electrostatics (Field flux, Capacitance)', value: '58%', color: 'bg-cyan-500' },
-          { topic: 'Thermodynamics (Heat engines)', value: '35%', color: 'bg-amber-500' },
-        ]
-      },
-      chemistry: {
-        resolved: sessions.filter(s => s.state === 'Completed' && s.topic === 'Chemistry').length,
-        streak: '1 day',
-        gaps: sessions.filter(s => s.topic === 'Chemistry').length,
-        accuracy: 55,
-        benchmarkText: 'You successfully identify stereochemistry isomers on the first attempt 55% of the time.',
-        accuracyLabel: 'Chemistry accuracy index',
-        knowledgeMap: [
-          { topic: 'Organic Chemistry (Nomenclature)', value: '42%', color: 'bg-rose-500' },
-          { topic: 'Chemical Bonding (Hybridization)', value: '30%', color: 'bg-emerald-500' },
-          { topic: 'Physical Chemistry (Kinetics)', value: '15%', color: 'bg-amber-500' },
-        ]
-      },
-      math: {
-        resolved: sessions.filter(s => s.state === 'Completed' && s.topic === 'Calculus').length,
-        streak: '2 days',
-        gaps: sessions.filter(s => s.topic === 'Calculus').length,
-        accuracy: 68,
-        benchmarkText: 'You successfully set up definite integration bounds on the first attempt 68% of the time.',
-        accuracyLabel: 'Math accuracy index',
-        knowledgeMap: [
-          { topic: 'Calculus (Definite integral bounds)', value: '68%', color: 'bg-amber-500' },
-          { topic: 'Coordinate Geometry (Conics)', value: '40%', color: 'bg-emerald-500' },
-          { topic: 'Algebra (Complex Numbers)', value: '25%', color: 'bg-cyan-500' },
-        ]
-      }
-    };
-  }, [sessions]);
+    const base = EXAM_SUBJECT_STATS[targetExam];
+    const keys = ['all', 'physics', 'chemistry', 'math'] as const;
+    return Object.fromEntries(
+      keys.map((key) => {
+        const filtered = filterSessionsBySubject(sessions, key);
+        return [
+          key,
+          {
+            ...base[key],
+            resolved: countResolved(filtered),
+            gaps: countGaps(filtered),
+          },
+        ];
+      })
+    ) as Record<'all' | 'physics' | 'chemistry' | 'math', (typeof base)['all'] & { resolved: number; gaps: number }>;
+  }, [sessions, targetExam]);
 
   const currentSubjectData = useMemo(() => {
     return subjectStats[activeSubject];
   }, [subjectStats, activeSubject]);
 
   const filteredSessions = useMemo(() => {
-    if (activeSubject === 'all') return sessions;
-    if (activeSubject === 'physics') return sessions.filter(s => s.topic === 'Mechanics' || s.topic === 'Electrostatics');
-    if (activeSubject === 'chemistry') return sessions.filter(s => s.topic === 'Chemistry');
-    return sessions.filter(s => s.topic === 'Calculus');
+    return filterSessionsBySubject(sessions, activeSubject);
   }, [sessions, activeSubject]);
 
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const persistedSessionIdsRef = useRef<Set<string>>(new Set());
+
+  const persistSession = async (session: Session) => {
+    if (!firebaseUser || guestProfile) return;
+    const isNew = !persistedSessionIdsRef.current.has(session.id);
+    try {
+      await upsertSession(firebaseUser.uid, targetExam, session, isNew);
+      persistedSessionIdsRef.current.add(session.id);
+    } catch (error) {
+      console.error('Failed to persist session:', error);
+    }
+  };
 
   // Sync theme setting
   useEffect(() => {
@@ -259,8 +228,55 @@ export default function Home() {
     if (saved) {
       setTheme(saved);
     }
+    const savedExam = localStorage.getItem('doubt-slayer-target-exam');
+    if (savedExam) {
+      setTargetExam(parseTargetExam(savedExam));
+    }
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (authLoading || !firebaseUser || guestProfile) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const savedExam = await loadUserTargetExam(firebaseUser.uid);
+        if (savedExam && !cancelled) {
+          setTargetExam(savedExam);
+          localStorage.setItem('doubt-slayer-target-exam', savedExam);
+        }
+
+        const exams: TargetExam[] = ['jee-mains', 'jee-advanced', 'cbse-12'];
+        const loaded = { ...INITIAL_SESSIONS_BY_EXAM };
+
+        for (const exam of exams) {
+          const stored = await loadUserSessions(firebaseUser.uid, exam);
+          if (stored.length > 0) {
+            loaded[exam] = stored;
+            stored.forEach((session) => persistedSessionIdsRef.current.add(session.id));
+          }
+        }
+
+        if (!cancelled) {
+          setSessionsByExam(loaded);
+        }
+      } catch (error) {
+        console.error('Failed to load user data from Firestore:', error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, firebaseUser, guestProfile]);
+
+  useEffect(() => {
+    if (!authLoading && firebaseUser && !guestProfile) {
+      setView((current) => (current === 'landing' ? 'dashboard' : current));
+    }
+  }, [authLoading, firebaseUser, guestProfile]);
 
   const toggleTheme = () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
@@ -291,28 +307,176 @@ export default function Home() {
       setCurrentSessionId(null);
       setMessages([]);
     }
+    if (firebaseUser && !guestProfile) {
+      void deleteSessionFromFirestore(sessionId).catch((error) =>
+        console.error('Failed to delete session from Firestore:', error)
+      );
+      persistedSessionIdsRef.current.delete(sessionId);
+    }
+  };
+
+  const handleExamChange = (exam: TargetExam) => {
+    setTargetExam(exam);
+    localStorage.setItem('doubt-slayer-target-exam', exam);
+    setActiveSubject('all');
+    setCurrentSessionId(null);
+    setMessages([]);
+    if (firebaseUser && !guestProfile) {
+      void saveUserTargetExam(firebaseUser.uid, exam).catch((error) =>
+        console.error('Failed to save target exam:', error)
+      );
+    }
   };
 
   // Enter guest mode
   const handleContinueAsGuest = () => {
-    setUser({ name: 'Guest Student', email: 'guest@doubt-slayer.in', provider: 'guest' });
+    setGuestProfile({ name: 'Guest Student', email: 'guest@doubt-slayer.in', provider: 'guest' });
     setView('dashboard');
   };
 
-  // Sign in mock with loading animation
-  const handleGoogleSignIn = () => {
+  const handleGoogleSignIn = async () => {
     setIsSigningIn(true);
-    setTimeout(() => {
-      setIsSigningIn(false);
-      setUser({ name: 'Rahul Sharma', email: 'rahul.sharma@jee.in', provider: 'google' });
+    try {
+      setGuestProfile(null);
+      await signInWithGoogle();
       setView('dashboard');
-    }, 1500);
+    } catch (error) {
+      console.error('Google sign-in failed:', error);
+      alert(
+        'Google sign-in failed. In Firebase Console, enable Google sign-in and add localhost to authorized domains.'
+      );
+    } finally {
+      setIsSigningIn(false);
+    }
   };
 
-  // Sign out
-  const handleSignOut = () => {
-    setUser(null);
+  const handleSignOut = async () => {
+    try {
+      await logout();
+    } catch (error) {
+      console.error('Sign out failed:', error);
+    }
+    setGuestProfile(null);
+    persistedSessionIdsRef.current.clear();
     setView('landing');
+  };
+
+  const streamTutorReply = async (
+    activeId: string,
+    conversation: ChatMessage[],
+    imageDataUrl?: string
+  ) => {
+    const tutorId = crypto.randomUUID();
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const placeholder: ChatMessage = { id: tutorId, role: 'tutor', content: '', meta: timestamp };
+
+    setMessages((current) => [...current, placeholder]);
+    setIsComposing(true);
+
+    try {
+      const imageBase64 = imageDataUrl?.includes(',')
+        ? imageDataUrl.split(',')[1]
+        : imageDataUrl;
+
+      const apiMessages = conversation.map((message, index) => {
+        const isLastStudent =
+          index === conversation.length - 1 && message.role === 'student';
+        return {
+          role: message.role === 'tutor' ? 'model' : 'user',
+          content: message.content,
+          ...(isLastStudent && imageBase64 ? { imageBase64 } : {}),
+        };
+      });
+
+      const activeSession = sessions.find((s) => s.id === activeId);
+      const actMatch = activeSession?.state.match(/Act (\d)/);
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: apiMessages,
+          targetExam,
+          sessionData: {
+            act: actMatch ? parseInt(actMatch[1], 10) : 1,
+            topic: activeSession?.topic || 'Unidentified',
+            problem: activeSession?.title || 'Student doubt',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || 'Chat request failed');
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response stream from tutor');
+      }
+
+      const decoder = new TextDecoder();
+      let fullText = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fullText += decoder.decode(value, { stream: true });
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === tutorId ? { ...message, content: fullText } : message
+          )
+        );
+      }
+
+      if (!fullText.trim()) {
+        fullText =
+          'I could not generate a reply. Please check that GEMINI_API_KEY_1 is set in .env.local and try again.';
+      }
+
+      const tutorMessage: ChatMessage = {
+        id: tutorId,
+        role: 'tutor',
+        content: fullText,
+        meta: timestamp,
+      };
+
+      setMessages((current) =>
+        current.map((message) => (message.id === tutorId ? tutorMessage : message))
+      );
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === activeId
+            ? { ...session, messages: [...session.messages, tutorMessage] }
+            : session
+        )
+      );
+      const baseSession = sessions.find((s) => s.id === activeId);
+      if (baseSession) {
+        void persistSession({ ...baseSession, messages: [...conversation, tutorMessage] });
+      }
+    } catch (error) {
+      console.error('Tutor stream error:', error);
+      const fallback: ChatMessage = {
+        id: tutorId,
+        role: 'tutor',
+        content:
+          'Unable to reach the AI tutor right now. Verify GEMINI_API_KEY_1 in .env.local and restart the dev server.',
+        meta: timestamp,
+      };
+      setMessages((current) =>
+        current.map((message) => (message.id === tutorId ? fallback : message))
+      );
+      setSessions((current) =>
+        current.map((session) =>
+          session.id === activeId
+            ? { ...session, messages: [...session.messages, fallback] }
+            : session
+        )
+      );
+    } finally {
+      setIsComposing(false);
+    }
   };
 
   // File Upload Handlers
@@ -336,7 +500,224 @@ export default function Home() {
   const handleNewChat = () => {
     setCurrentSessionId(null);
     setMessages([]);
+    resetEngineState();
     setView('chat');
+  };
+
+  // ===== ENGINE: Ingest an image and start the diagnostic pipeline =====
+  const handleEngineIngest = async (imageDataUrl: string, title: string) => {
+    const sessionId = crypto.randomUUID();
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const newSession: Session = {
+      id: sessionId,
+      title,
+      phase: 'INGESTION',
+      state: 'Ingesting...',
+      topic: 'Analyzing',
+      date: 'Today',
+      hasImage: true,
+      messages: [{ id: crypto.randomUUID(), role: 'student', content: `Uploaded: ${title}`, meta: timestamp }],
+    };
+
+    setSessions((current) => [newSession, ...current]);
+    setCurrentSessionId(sessionId);
+    setMessages(newSession.messages);
+    void persistSession(newSession);
+    setEnginePhase('INGESTION');
+    setEngineLoading(true);
+    setEngineError(null);
+
+    try {
+      const imageBase64 = imageDataUrl.includes(',') ? imageDataUrl.split(',')[1] : imageDataUrl;
+
+      const response = await fetch('/api/engine/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64, sessionId, targetExam }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || 'Ingestion failed');
+      }
+
+      const data = await response.json();
+      setSolutionContext(data.solutionContext);
+      setDiagnosticBattery(data.diagnosticBattery);
+      setEnginePhase('DIAGNOSIS');
+
+      // Update session metadata
+      setSessions((current) => {
+        const next = current.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                phase: 'DIAGNOSIS' as const,
+                state: 'Act 1: Diagnosis',
+                topic: data.solutionContext?.topic || 'Physics',
+                solutionContext: data.solutionContext,
+                diagnosticBattery: data.diagnosticBattery,
+              }
+            : s
+        );
+        const updated = next.find((s) => s.id === sessionId);
+        if (updated) void persistSession(updated);
+        return next;
+      });
+    } catch (error: any) {
+      console.error('Engine ingest error:', error);
+      setEngineError(error.message || 'Failed to analyze the image.');
+      setEnginePhase(null);
+    } finally {
+      setEngineLoading(false);
+    }
+  };
+
+  // ===== ENGINE: Handle Diagnosis completion =====
+  const handleDiagnosisComplete = async (result: DiagnosisResult) => {
+    setAssessmentLog(result.assessmentLog);
+
+    if (result.allCorrect) {
+      // Skip repair, go straight to reconstruction
+      setEnginePhase('RECONSTRUCTION');
+      setEngineLoading(true);
+      try {
+        const response = await fetch('/api/engine/reconstruct', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            solutionContext,
+            assessmentLog: result.assessmentLog,
+            microExampleResults: [],
+            sessionId: currentSessionId,
+            targetExam,
+          }),
+        });
+        if (!response.ok) throw new Error('Reconstruction API failed');
+        const data = await response.json();
+        setReconstructionScaffold(data.reconstructionScaffold);
+        setSessions((prev) => {
+          const next = prev.map((s) =>
+            s.id === currentSessionId ? { ...s, phase: 'RECONSTRUCTION' as const, state: 'Act 3: Reconstruction' } : s
+          );
+          const updated = next.find((s) => s.id === currentSessionId);
+          if (updated) void persistSession(updated);
+          return next;
+        });
+      } catch (error: any) {
+        setEngineError(error.message);
+        setEnginePhase(null);
+      } finally {
+        setEngineLoading(false);
+      }
+      return;
+    }
+
+    // Has weak concepts -> go to Repair
+    setEnginePhase('REPAIR');
+    setEngineLoading(true);
+    try {
+      const response = await fetch('/api/engine/repair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assessmentLog: result.assessmentLog,
+          sessionId: currentSessionId,
+          targetExam,
+        }),
+      });
+      if (!response.ok) throw new Error('Repair API failed');
+      const data = await response.json();
+      setMicroExampleSet(data.microExampleSet);
+      setSessions((prev) => {
+        const next = prev.map((s) =>
+          s.id === currentSessionId ? { ...s, phase: 'REPAIR' as const, state: 'Act 2: Fragment Repair' } : s
+        );
+        const updated = next.find((s) => s.id === currentSessionId);
+        if (updated) void persistSession(updated);
+        return next;
+      });
+    } catch (error: any) {
+      setEngineError(error.message);
+      setEnginePhase(null);
+    } finally {
+      setEngineLoading(false);
+    }
+  };
+
+  // ===== ENGINE: Handle Repair completion =====
+  const handleRepairComplete = async (result: RepairResult) => {
+    setRepairResults(result.results);
+    setEnginePhase('RECONSTRUCTION');
+    setEngineLoading(true);
+
+    try {
+      const response = await fetch('/api/engine/reconstruct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          solutionContext,
+          assessmentLog,
+          microExampleResults: result.results,
+          sessionId: currentSessionId,
+          targetExam,
+        }),
+      });
+      if (!response.ok) throw new Error('Reconstruction API failed');
+      const data = await response.json();
+      setReconstructionScaffold(data.reconstructionScaffold);
+      setSessions((prev) => {
+        const next = prev.map((s) =>
+          s.id === currentSessionId ? { ...s, phase: 'RECONSTRUCTION' as const, state: 'Act 3: Reconstruction' } : s
+        );
+        const updated = next.find((s) => s.id === currentSessionId);
+        if (updated) void persistSession(updated);
+        return next;
+      });
+    } catch (error: any) {
+      setEngineError(error.message);
+      setEnginePhase(null);
+    } finally {
+      setEngineLoading(false);
+    }
+  };
+
+  // ===== ENGINE: Handle Reconstruction completion =====
+  const handleReconstructionComplete = async (result: ReconstructionResult) => {
+    setReconstructionResults(result.stepResults);
+    setEnginePhase('RESOLUTION');
+    setEngineLoading(true);
+
+    try {
+      const response = await fetch('/api/engine/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: currentSessionId,
+          solutionContext,
+          assessmentLog,
+          reconstructionResults: result.stepResults,
+          targetExam,
+        }),
+      });
+      if (!response.ok) throw new Error('Resolution API failed');
+      const data = await response.json();
+      setSessionCoverage(data.sessionCoverage);
+      setSessions((prev) => {
+        const next = prev.map((s) =>
+          s.id === currentSessionId ? { ...s, phase: 'RESOLUTION' as const, state: 'Completed' } : s
+        );
+        const updated = next.find((s) => s.id === currentSessionId);
+        if (updated) void persistSession(updated);
+        return next;
+      });
+    } catch (error: any) {
+      setEngineError(error.message);
+      setEnginePhase(null);
+    } finally {
+      setEngineLoading(false);
+    }
   };
 
   // Submit student response in chat
@@ -348,17 +729,26 @@ export default function Home() {
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const studentMessageId = crypto.randomUUID();
 
+    // If there's an image attachment, route to the 5-phase engine
+    if (attachment?.dataUrl) {
+      const title = trimmed || attachment.name || 'Image problem diagnosis';
+      const imageDataUrl = attachment.dataUrl;
+      setInput('');
+      setAttachment(null);
+      void handleEngineIngest(imageDataUrl, title.length > 40 ? title.substring(0, 40) + '...' : title);
+      return;
+    }
+
     const newStudentMsg: ChatMessage = {
       id: studentMessageId,
       role: 'student',
-      content: trimmed || (attachment ? `Uploaded a problem image: ${attachment.name}` : ''),
+      content: trimmed || '',
       meta: timestamp,
     };
 
     const updatedMessages = [...messages, newStudentMsg];
     setMessages(updatedMessages);
     setInput('');
-    const hasImage = !!attachment;
     setAttachment(null);
 
     // Dynamic session management: update or create
@@ -366,58 +756,34 @@ export default function Home() {
     if (!activeId) {
       activeId = crypto.randomUUID();
       const topic = trimmed.toLowerCase().includes('integration') || trimmed.toLowerCase().includes('integral') ? 'Calculus' : 'Mechanics';
-      const title = trimmed ? (trimmed.length > 30 ? trimmed.substring(0, 30) + '...' : trimmed) : 'Image problem diagnosis';
+      const title = trimmed ? (trimmed.length > 30 ? trimmed.substring(0, 30) + '...' : trimmed) : 'New chat';
       
       const newSession: Session = {
         id: activeId,
         title,
+        phase: 'DIAGNOSIS',
         state: 'Act 1: Diagnosis',
         topic,
         date: 'Today',
-        hasImage,
+        hasImage: false,
         messages: [newStudentMsg],
       };
 
       setSessions((current) => [newSession, ...current]);
       setCurrentSessionId(activeId);
+      void persistSession(newSession);
     } else {
-      setSessions((current) =>
-        current.map((s) => (s.id === activeId ? { ...s, messages: [...s.messages, newStudentMsg] } : s))
-      );
+      setSessions((current) => {
+        const next = current.map((s) =>
+          s.id === activeId ? { ...s, messages: [...s.messages, newStudentMsg] } : s
+        );
+        const updated = next.find((s) => s.id === activeId);
+        if (updated) void persistSession(updated);
+        return next;
+      });
     }
 
-    // Trigger mock Socratic AI tutor responses
-    setIsComposing(true);
-    setTimeout(() => {
-      const activeSession = sessions.find((s) => s.id === activeId);
-      const isCalculus = activeSession?.topic === 'Calculus';
-
-      let aiContent = '';
-      if (trimmed.toLowerCase().includes('torque') || trimmed.toLowerCase().includes('axis')) {
-        aiContent = 'Understood. Let us examine the rotational torque about the moving axis. In order to make the torque of tension vanish, about which point must we evaluate the torque? Let us think about the radius vector.';
-      } else if (trimmed.toLowerCase().includes('integral') || trimmed.toLowerCase().includes('integration')) {
-        aiContent = 'Excellent topic. Let us set up the integral first. If the charge density is given by $\\sigma(r) = \\sigma_0 (1 - r/R)$, what would be the charge element $dq$ for a thin concentric ring of radius $r$ and thickness $dr$?';
-      } else if (trimmed.toLowerCase().includes('friction') || trimmed.toLowerCase().includes('circular')) {
-        aiContent = 'Friction acts as the centripetal force here. To find the maximum safe speed, what is the maximum possible static friction force in terms of coefficient $\\mu$ and normal force $N$? Let us calculate that ratio first.';
-      } else {
-        aiContent = isCalculus
-          ? 'Let us look at the boundary conditions first. If the limit approaches $x \\to 0$, which algebraic expansion must we apply to simplify the numerator?'
-          : 'Let us isolate the concept being tested. Is this conservation of mechanical energy, linear momentum, or angular momentum? What conditions must hold for torque to be conserved?';
-      }
-
-      const newTutorMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'tutor',
-        content: aiContent,
-        meta: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-
-      setMessages((current) => [...current, newTutorMsg]);
-      setSessions((current) =>
-        current.map((s) => (s.id === activeId ? { ...s, messages: [...s.messages, newTutorMsg] } : s))
-      );
-      setIsComposing(false);
-    }, 1200);
+    void streamTutorReply(activeId!, updatedMessages);
   };
 
   const handleSuggestedPromptClick = (prompt: string) => {
@@ -448,7 +814,8 @@ export default function Home() {
   return (
     <main
       className={cn(
-        'min-h-[100dvh] transition-colors duration-300 font-sans relative flex flex-col',
+        'transition-colors duration-300 font-sans relative flex flex-col',
+        view === 'chat' ? 'h-[100dvh] overflow-hidden' : 'min-h-[100dvh]',
         isDark ? 'bg-[#090f0c] text-slate-100' : 'bg-[#f6f8f4] text-slate-800'
       )}
     >
@@ -495,7 +862,7 @@ export default function Home() {
                   )}
                 >
                   <Sparkles className="h-3 w-3 animate-pulse" />
-                  Socratic Physics & Math Diagnostics
+                  Socratic Physics, Chemistry & Math Diagnostics
                 </motion.div>
 
                 <motion.h1
@@ -519,7 +886,7 @@ export default function Home() {
                   transition={{ delay: 0.2 }}
                   className={cn('text-base sm:text-lg max-w-xl leading-relaxed', isDark ? 'text-slate-400' : 'text-slate-600')}
                 >
-                  Doubt Slayer is not an answer engine. It isolates the exact conceptual fault line in your physics or math solutions and co-constructs the fix with you using micro-problems.
+                  Doubt Slayer is not an answer engine. It isolates the exact conceptual fault line in your physics, chemistry, or math solutions and co-constructs the fix with you using micro-problems.
                 </motion.p>
 
                 {/* Workflow Cards */}
@@ -573,7 +940,7 @@ export default function Home() {
                   </div>
 
                   <AnimatePresence mode="wait">
-                    {isSigningIn ? (
+                    {isSigningIn || authLoading ? (
                       <motion.div
                         key="loading-auth"
                         initial={{ opacity: 0 }}
@@ -660,11 +1027,41 @@ export default function Home() {
                 </div>
                 <div>
                   <h1 className="text-lg font-black uppercase tracking-wider">Doubt Slayer</h1>
-                  <p className="text-[10px] uppercase font-bold text-slate-400">JEE Workspace</p>
+                  <p className="text-[10px] uppercase font-bold text-slate-400">
+                    {getExamWorkspaceLabel(targetExam)}
+                  </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap justify-end">
+                <label className="sr-only" htmlFor="target-exam">
+                  Target exam
+                </label>
+                <div className="relative">
+                  <select
+                    id="target-exam"
+                    value={targetExam}
+                    onChange={(e) => handleExamChange(e.target.value as TargetExam)}
+                    className={cn(
+                      'appearance-none rounded-lg border py-1.5 pl-3 pr-8 text-xs font-bold cursor-pointer transition',
+                      isDark
+                        ? 'border-white/10 bg-[#101a15] text-white hover:border-emerald-500/30'
+                        : 'border-slate-200 bg-white text-slate-800 hover:border-[#163f36]/30'
+                    )}
+                  >
+                    {EXAM_OPTIONS.map((exam) => (
+                      <option key={exam.id} value={exam.id}>
+                        {exam.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    className={cn(
+                      'pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2',
+                      isDark ? 'text-slate-400' : 'text-slate-500'
+                    )}
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={toggleTheme}
@@ -856,7 +1253,7 @@ export default function Home() {
                 <div className="mb-6 flex justify-between items-center">
                   <div>
                     <h3 className="text-xs font-black tracking-wider uppercase text-[#d06b38]">Taxonomy Tree</h3>
-                    <p className="text-base font-bold mt-0.5">JEE Syllabus Mastery Map</p>
+                    <p className="text-base font-bold mt-0.5">{getSyllabusMapTitle(targetExam)}</p>
                   </div>
                   <Target className="h-4 w-4 text-[#1b8f6a]" />
                 </div>
@@ -1053,7 +1450,7 @@ export default function Home() {
 
                   <div className="min-w-0">
                     <h2 className="text-sm font-black uppercase tracking-wider truncate">
-                      {activeSessionMeta ? activeSessionMeta.title : 'AI Diagnostic Tutor'}
+                      {activeSessionMeta ? activeSessionMeta.title : 'AI Tutor'}
                     </h2>
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">
                       {activeSessionMeta ? activeSessionMeta.state : 'Ready to diagnose'}
@@ -1092,82 +1489,208 @@ export default function Home() {
                 </div>
               </header>
 
-              {/* Chat Message Bubble area */}
+              {/* Phase Progress Bar (only in engine mode) */}
+              {isEngineMode && enginePhase && (
+                <div className={cn(
+                  'shrink-0 border-b px-4 py-2.5',
+                  isDark ? 'border-white/5 bg-[#101a15]/60' : 'border-slate-200 bg-white/60'
+                )}>
+                  <PhaseProgressBar currentPhase={enginePhase} theme={theme} />
+                </div>
+              )}
+
+              {/* Main Content Area */}
               <div className="flex-1 overflow-y-auto px-4 py-5 custom-scrollbar relative z-0">
                 <div className="mx-auto max-w-3xl min-h-full flex flex-col">
-                  <AnimatePresence mode="wait">
-                    {messages.length === 0 ? (
-                      /* Chat Empty State with animation */
-                      <motion.div
-                        key="empty-chat"
-                        initial={{ opacity: 0, scale: 0.98 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.98 }}
-                        className="flex-1 flex flex-col items-center justify-center text-center py-12"
-                      >
-                        <div className="relative h-28 w-28 flex items-center justify-center mb-6">
-                          {/* Animated SVG Rings */}
-                          <div className={cn(
-                            'absolute inset-0 rounded-full border border-dashed animate-spin duration-[40s]',
-                            isDark ? 'border-emerald-500/10' : 'border-emerald-950/10'
-                          )} />
-                          <div className={cn(
-                            'absolute inset-4 rounded-full border border-dotted animate-spin duration-[15s]',
-                            isDark ? 'border-amber-500/10' : 'border-amber-950/10'
-                          )} />
-                          <div className={cn(
-                            'absolute inset-2 bg-gradient-to-tr rounded-full animate-float flex items-center justify-center shadow-lg',
-                            isDark ? 'from-[#101a15] to-[#16241e]' : 'from-[#edf4ef] to-white'
-                          )}>
-                            <Brain className="h-10 w-10 text-[#1b8f6a]" />
+
+                  {/* ENGINE MODE: Phase-specific panels */}
+                  {isEngineMode ? (
+                    <>
+                      {/* INGESTION: Loading spinner */}
+                      {enginePhase === 'INGESTION' && engineLoading && (
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="flex-1 flex flex-col items-center justify-center text-center py-16"
+                        >
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ repeat: Infinity, duration: 2, ease: 'linear' }}
+                            className="h-16 w-16 rounded-full border-4 border-emerald-500/20 border-t-emerald-500 mb-6"
+                          />
+                          <h3 className="text-lg font-black tracking-tight">Analyzing Problem</h3>
+                          <p className={cn('text-xs mt-2 max-w-xs leading-relaxed', isDark ? 'text-slate-400' : 'text-slate-500')}>
+                            The Architect is parsing your image while the Interrogator prepares diagnostic questions...
+                          </p>
+                          <div className="flex items-center gap-2 mt-4">
+                            <Loader2 className="h-3 w-3 animate-spin text-emerald-500" />
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">
+                              Dual AI pipeline active
+                            </span>
                           </div>
-                        </div>
+                        </motion.div>
+                      )}
 
-                        <h3 className="text-xl font-extrabold tracking-tight">Socrates Diagnostic Active</h3>
-                        <p className={cn('text-xs mt-2 max-w-sm leading-relaxed', isDark ? 'text-slate-400' : 'text-slate-500')}>
-                          Snap a photo of HC Verma, upload a diagram, or click a pre-set conceptual topic below to initiate diagnosis.
-                        </p>
+                      {/* DIAGNOSIS: Question-by-question panel */}
+                      {enginePhase === 'DIAGNOSIS' && diagnosticBattery && !engineLoading && (
+                        <DiagnosisPanel
+                          battery={diagnosticBattery}
+                          theme={theme}
+                          onComplete={handleDiagnosisComplete}
+                        />
+                      )}
 
-                        <div className="mt-8 grid gap-2.5 max-w-md w-full">
-                          {suggestedPrompts.map((prompt) => (
+                      {/* REPAIR: Micro-example practice */}
+                      {enginePhase === 'REPAIR' && microExampleSet && !engineLoading && (
+                        <RepairPanel
+                          microExampleSet={microExampleSet}
+                          theme={theme}
+                          onComplete={handleRepairComplete}
+                        />
+                      )}
+
+                      {/* RECONSTRUCTION: Step-by-step rebuild */}
+                      {enginePhase === 'RECONSTRUCTION' && reconstructionScaffold && !engineLoading && (
+                        <ReconstructionPanel
+                          scaffold={reconstructionScaffold}
+                          theme={theme}
+                          onComplete={handleReconstructionComplete}
+                        />
+                      )}
+
+                      {/* RESOLUTION: Mastery report */}
+                      {enginePhase === 'RESOLUTION' && sessionCoverage && solutionContext && !engineLoading && (
+                        <ResolutionPanel
+                          sessionCoverage={sessionCoverage}
+                          solutionContext={solutionContext}
+                          theme={theme}
+                          onBackToDashboard={() => {
+                            resetEngineState();
+                            setView('dashboard');
+                          }}
+                        />
+                      )}
+
+                      {/* Loading state for mid-session API calls (Repair, Reconstruct, Resolve) */}
+                      {engineLoading && enginePhase !== 'INGESTION' && (
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="flex-1 flex flex-col items-center justify-center text-center py-16"
+                        >
+                          <Loader2 className="h-10 w-10 animate-spin text-emerald-500 mb-4" />
+                          <h3 className="text-sm font-black tracking-tight">
+                            {enginePhase === 'REPAIR' && 'Generating micro-examples...'}
+                            {enginePhase === 'RECONSTRUCTION' && 'Building reconstruction scaffold...'}
+                            {enginePhase === 'RESOLUTION' && 'Calculating mastery report...'}
+                          </h3>
+                        </motion.div>
+                      )}
+
+                      {/* Error state */}
+                      {engineError && (
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="flex-1 flex flex-col items-center justify-center text-center py-16"
+                        >
+                          <div className={cn(
+                            'rounded-2xl border p-6 max-w-sm',
+                            isDark ? 'border-red-500/20 bg-red-500/5' : 'border-red-200 bg-red-50'
+                          )}>
+                            <p className="text-sm font-bold text-red-400 mb-2">Engine Error</p>
+                            <p className={cn('text-xs', isDark ? 'text-slate-300' : 'text-slate-600')}>{engineError}</p>
                             <button
-                              key={prompt}
                               type="button"
-                              onClick={() => handleSuggestedPromptClick(prompt)}
-                              className={cn(
-                                'text-left p-3.5 rounded-xl border text-xs font-bold leading-normal transition-all duration-300 hover:scale-[1.01]',
-                                isDark
-                                  ? 'border-white/5 bg-[#101a15] hover:bg-[#16241e] hover:border-[#1b8f6a]/20 text-slate-200'
-                                  : 'border-slate-200 bg-white hover:bg-slate-50 hover:border-[#163f36]/20 text-slate-700'
-                              )}
+                              onClick={() => {
+                                resetEngineState();
+                                handleNewChat();
+                              }}
+                              className="mt-4 px-4 py-2 rounded-lg bg-red-500/10 text-red-400 text-xs font-bold border border-red-500/20 hover:bg-red-500/20 transition"
                             >
-                              {prompt}
+                              Start Over
                             </button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </>
+                  ) : (
+                    /* STANDARD CHAT MODE: Original chat bubbles */
+                    <AnimatePresence mode="wait">
+                      {messages.length === 0 ? (
+                        /* Chat Empty State with animation */
+                        <motion.div
+                          key="empty-chat"
+                          initial={{ opacity: 0, scale: 0.98 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.98 }}
+                          className="flex-1 flex flex-col items-center justify-center text-center py-12"
+                        >
+                          <div className="relative h-28 w-28 flex items-center justify-center mb-6">
+                            {/* Animated SVG Rings */}
+                            <div className={cn(
+                              'absolute inset-0 rounded-full border border-dashed animate-spin duration-[40s]',
+                              isDark ? 'border-emerald-500/10' : 'border-emerald-950/10'
+                            )} />
+                            <div className={cn(
+                              'absolute inset-4 rounded-full border border-dotted animate-spin duration-[15s]',
+                              isDark ? 'border-amber-500/10' : 'border-amber-950/10'
+                            )} />
+                            <div className={cn(
+                              'absolute inset-2 bg-gradient-to-tr rounded-full animate-float flex items-center justify-center shadow-lg',
+                              isDark ? 'from-[#101a15] to-[#16241e]' : 'from-[#edf4ef] to-white'
+                            )}>
+                              <Brain className="h-10 w-10 text-[#1b8f6a]" />
+                            </div>
+                          </div>
+
+                          <h3 className="text-xl font-extrabold tracking-tight">Socratic Tutor Active</h3>
+                          <p className={cn('text-xs mt-2 max-w-sm leading-relaxed', isDark ? 'text-slate-400' : 'text-slate-500')}>
+                            Snap a photo of HC Verma, upload a diagram, or click a pre-set conceptual topic below to initiate diagnosis.
+                          </p>
+
+                          <div className="mt-8 grid gap-2.5 max-w-md w-full">
+                            {suggestedPrompts.map((prompt) => (
+                              <button
+                                key={prompt}
+                                type="button"
+                                onClick={() => handleSuggestedPromptClick(prompt)}
+                                className={cn(
+                                  'text-left p-3.5 rounded-xl border text-xs font-bold leading-normal transition-all duration-300 hover:scale-[1.01]',
+                                  isDark
+                                    ? 'border-white/5 bg-[#101a15] hover:bg-[#16241e] hover:border-[#1b8f6a]/20 text-slate-200'
+                                    : 'border-slate-200 bg-white hover:bg-slate-50 hover:border-[#163f36]/20 text-slate-700'
+                                )}
+                              >
+                                {prompt}
+                              </button>
+                            ))}
+                          </div>
+                        </motion.div>
+                      ) : (
+                        /* Chat message list */
+                        <motion.div
+                          key="chat-messages"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="space-y-4 pb-4"
+                        >
+                          {messages.map((message) => (
+                            <MessageBubble key={message.id} message={message} theme={theme} />
                           ))}
-                        </div>
-                      </motion.div>
-                    ) : (
-                      /* Chat message list */
-                      <motion.div
-                        key="chat-messages"
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        className="space-y-4 pb-4"
-                      >
-                        {messages.map((message) => (
-                          <MessageBubble key={message.id} message={message} theme={theme} />
-                        ))}
-                        {isComposing && <TypingIndicator theme={theme} />}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                          {isComposing && <TypingIndicator theme={theme} />}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  )}
                   
                   {/* Auto-scroll anchor */}
                   <div ref={chatEndRef} className="h-4 shrink-0" />
                 </div>
               </div>
 
-              {/* Chat Input panel */}
+              {/* Chat Input panel - hidden in engine mode */}
+              {!isEngineMode && (
               <footer className={cn(
                 'shrink-0 border-t p-4 transition-colors duration-300',
                 isDark ? 'border-white/5 bg-[#101a15]' : 'border-slate-200 bg-white'
@@ -1276,7 +1799,7 @@ export default function Home() {
                         }
                       }}
                       rows={1}
-                      placeholder="Ask the Socratic tutor about your JEE doubt..."
+                      placeholder={getChatPlaceholder(targetExam)}
                       className="flex-1 max-h-32 min-h-[40px] py-2 bg-transparent outline-none border-none text-sm resize-none leading-relaxed placeholder-slate-400"
                     />
 
@@ -1298,6 +1821,7 @@ export default function Home() {
                   </div>
                 </div>
               </footer>
+              )}
 
             </section>
           </motion.div>

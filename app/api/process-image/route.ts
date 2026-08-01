@@ -1,9 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-
-const defaultAi = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
+import { getGeminiClient } from "@/lib/gemini/client";
 
 async function isCustomKeyValid(apiKey: string) {
   try {
@@ -22,19 +19,22 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No image provided" }, { status: 400 });
     }
 
-    let ai = defaultAi;
+    let ai;
     let customKeyFailed = false;
     if (customApiKey && typeof customApiKey === 'string' && customApiKey.trim() !== '') {
       const isValid = await isCustomKeyValid(customApiKey);
       if (isValid) {
-        ai = new GoogleGenAI({ apiKey: customApiKey });
+        ai = getGeminiClient("ingest_flash", customApiKey);
       } else {
         customKeyFailed = true;
+        ai = getGeminiClient("ingest_flash");
       }
+    } else {
+      ai = getGeminiClient("ingest_flash");
     }
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: {
         parts: [
           {

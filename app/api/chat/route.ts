@@ -1,9 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 import { NextRequest, NextResponse } from "next/server";
-
-const defaultAi = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
+import { getGeminiClient } from "@/lib/gemini/client";
+import { buildChatSystemInstruction } from "@/lib/exam-prompts";
+import { parseTargetExam } from "@/lib/exams";
 
 async function isCustomKeyValid(apiKey: string) {
   try {
@@ -16,42 +15,25 @@ async function isCustomKeyValid(apiKey: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, sessionData, customApiKey } = await req.json();
+    const { messages, sessionData, customApiKey, targetExam: rawExam } = await req.json();
+    const targetExam = parseTargetExam(rawExam);
 
-    let ai = defaultAi;
+    let ai;
     let customKeyFailed = false;
 
     if (customApiKey && typeof customApiKey === 'string' && customApiKey.trim() !== '') {
       const isValid = await isCustomKeyValid(customApiKey);
       if (isValid) {
-        ai = new GoogleGenAI({ apiKey: customApiKey });
+        ai = getGeminiClient("resolve_flash", customApiKey);
       } else {
         customKeyFailed = true;
+        ai = getGeminiClient("resolve_flash");
       }
+    } else {
+      ai = getGeminiClient("resolve_flash");
     }
 
-    const systemInstruction = `You are a stubborn JEE tutor.
-We are building an AI-native tutoring service. You are the tutor, diagnostician, and bookkeeper.
-
-Current Session State:
-Act: ${sessionData?.act || 1}
-Topic: ${sessionData?.topic || 'Unidentified'}
-Problem Statement: ${sessionData?.problem || 'Not provided'}
-
-RULES for your behavior:
-1. No paragraphs. Responses capped at 2-3 lines (max 60 words).
-2. No direct answers. Never say "The answer is X". Ask things like "What is the net force? Divide by mass."
-3. Variable Granularity. High student confidence -> next prompt asks 2-3 steps. Low confidence -> isolate a single variable substitution.
-4. The 3-Strike Rule. If a student fails a gate in Act 3 three times, do not reveal the answer. Retreat to a micro-example (Act 2).
-5. Hinglish tolerance. Understand Romanized Hindi-English mix, but respond in crisp English.
-
-THE THREE-ACT SESSION STATE MACHINE:
-Act 1: Diagnosis. Ask 2-4 sharp, multiple-choice or one-word questions targeting the exact step where the solution breaks.
-Act 2: Fragment Repair. Generate a 2-minute micro-example targeting the exact gap. Wait for student to solve it. 
-Act 3: Reconstruction. Return to the original problem. Co-build solution via Socratic questioning. Step size adapts to confidence.
-
-If you believe the act should change based on the conversation (e.g. they successfully finished the micro-example, so you move back to Act 3), explicitly state that you are moving back to the original problem.
-`;
+    const systemInstruction = buildChatSystemInstruction(targetExam, sessionData);
 
     // Process messages to fit Gemini API format
     const contents = messages.map((m: any) => {
@@ -74,7 +56,7 @@ If you believe the act should change based on the conversation (e.g. they succes
     });
 
     const responseStream = await ai.models.generateContentStream({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents,
       config: {
         systemInstruction,
